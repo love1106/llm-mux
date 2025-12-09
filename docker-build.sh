@@ -1,20 +1,15 @@
 #!/usr/bin/env bash
 #
-# build.sh - Linux/macOS Build Script
+# docker-build.sh - Build and run llm-mux Docker container
 #
-# This script automates the process of building and running the Docker container
-# with version information dynamically injected at build time.
 
-# Exit immediately if a command exits with a non-zero status.
 set -euo pipefail
 
-# --- Step 1: Choose Environment ---
 echo "Please select an option:"
 echo "1) Run using Pre-built Image (Recommended)"
 echo "2) Build from Source and Run (For Developers)"
 read -r -p "Enter choice [1-2]: " choice
 
-# --- Step 2: Execute based on choice ---
 case "$choice" in
   1)
     echo "--- Running with Pre-built Image ---"
@@ -25,31 +20,25 @@ case "$choice" in
   2)
     echo "--- Building from Source and Running ---"
 
-    # Get Version Information
-    VERSION="$(git describe --tags --always --dirty)"
-    COMMIT="$(git rev-parse --short HEAD)"
+    VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')"
+    COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo 'none')"
     BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-    echo "Building with the following info:"
+    echo "Building with:"
     echo "  Version: ${VERSION}"
     echo "  Commit: ${COMMIT}"
     echo "  Build Date: ${BUILD_DATE}"
-    echo "----------------------------------------"
 
-    # Build and start the services with a local-only image tag
-    export CLI_PROXY_IMAGE="cli-proxy-api:local"
-    
-    echo "Building the Docker image..."
+    export LLM_MUX_IMAGE="llm-mux:local"
+
     docker compose build \
       --build-arg VERSION="${VERSION}" \
       --build-arg COMMIT="${COMMIT}" \
       --build-arg BUILD_DATE="${BUILD_DATE}"
 
-    echo "Starting the services..."
     docker compose up -d --remove-orphans --pull never
 
-    echo "Build complete. Services are starting."
-    echo "Run 'docker compose logs -f' to see the logs."
+    echo "Build complete. Run 'docker compose logs -f' to see logs."
     ;;
   *)
     echo "Invalid choice. Please enter 1 or 2."
