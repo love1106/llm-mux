@@ -431,14 +431,15 @@ func (r *ModelRegistry) addToCanonicalIndex(canonicalID, provider, modelID strin
 	})
 }
 
-// GetProvidersWithModelID returns all providers and their model IDs for a canonical/model ID
+// GetProvidersWithModelID returns all providers and their provider-specific model IDs.
+// For canonical models, returns the translated model ID per provider.
+// For non-canonical models, returns the original model ID.
 func (r *ModelRegistry) GetProvidersWithModelID(modelID string) []ProviderModelMapping {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
-	// First check canonical index
+	// Check canonical index (returns provider-specific model IDs)
 	if mappings, ok := r.canonicalIndex[modelID]; ok && len(mappings) > 0 {
-		// Filter to only include providers with active registrations
 		result := make([]ProviderModelMapping, 0, len(mappings))
 		for _, m := range mappings {
 			key := m.Provider + ":" + m.ModelID
@@ -451,22 +452,33 @@ func (r *ModelRegistry) GetProvidersWithModelID(modelID string) []ProviderModelM
 		}
 	}
 
-	// Fallback: direct model lookup (for models without canonical mapping)
-	var result []ProviderModelMapping
+	// Fallback: use GetModelProviders and return same modelID for all
+	providers := r.getModelProvidersInternal(modelID)
+	if len(providers) == 0 {
+		return nil
+	}
+	result := make([]ProviderModelMapping, len(providers))
+	for i, p := range providers {
+		result[i] = ProviderModelMapping{Provider: p, ModelID: modelID}
+	}
+	return result
+}
+
+// getModelProvidersInternal is the lock-free internal version for use within locked contexts
+func (r *ModelRegistry) getModelProvidersInternal(modelID string) []string {
+	var result []string
 	for key, reg := range r.models {
 		if reg == nil || reg.Count == 0 {
 			continue
 		}
-		// Check direct match or provider:modelID format
 		if key == modelID {
 			for provider, count := range reg.Providers {
 				if count > 0 {
-					result = append(result, ProviderModelMapping{Provider: provider, ModelID: modelID})
+					result = append(result, provider)
 				}
 			}
-		} else if idx := len(key) - len(modelID) - 1; idx > 0 && key[idx] == ':' && key[idx+1:] == modelID {
-			provider := key[:idx]
-			result = append(result, ProviderModelMapping{Provider: provider, ModelID: modelID})
+		} else if idx := strings.Index(key, ":"); idx > 0 && key[idx+1:] == modelID {
+			result = append(result, key[:idx])
 		}
 	}
 	return result
@@ -827,48 +839,28 @@ func (r *ModelRegistry) GetModelCount(modelID string) int {
 	return 0
 }
 
-// GetModelProviders returns provider identifiers that currently supply the given model
-// Parameters:
-//   - modelID: The model ID to check
-//
-// Returns:
-//   - []string: Provider identifiers ordered by availability count (descending)
+// GetModelProviders returns provider identifiers that currently supply the given model.
+// Uses canonical index for cross-provider routing, falls back to direct lookup.
 func (r *ModelRegistry) GetModelProviders(modelID string) []string {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
-	log.Debugf("GetModelProviders: searching for modelID=%s, total models in registry=%d", modelID, len(r.models))
-
-	// Search for provider-specific model keys (provider:modelID)
-	var foundProviders []string
-	for key, registration := range r.models {
-		if registration == nil {
-			continue
+	// Check canonical index first (for cross-provider routing)
+	if mappings, ok := r.canonicalIndex[modelID]; ok && len(mappings) > 0 {
+		result := make([]string, 0, len(mappings))
+		for _, m := range mappings {
+			key := m.Provider + ":" + m.ModelID
+			if reg, ok := r.models[key]; ok && reg != nil && reg.Count > 0 {
+				result = append(result, m.Provider)
+			}
 		}
-
-		// Check if this key matches our model (either direct match or provider:modelID format)
-		if key == modelID {
-			// Direct match - collect all providers
-			for provider := range registration.Providers {
-				if registration.Providers[provider] > 0 {
-					foundProviders = append(foundProviders, provider)
-				}
-			}
-		} else if strings.Contains(key, ":") {
-			// Provider-specific key format: "provider:modelID"
-			parts := strings.SplitN(key, ":", 2)
-			if len(parts) == 2 && parts[1] == modelID {
-				provider := parts[0]
-				if registration.Count > 0 {
-					foundProviders = append(foundProviders, provider)
-					log.Debugf("GetModelProviders: found provider=%s for model=%s (key=%s)", provider, modelID, key)
-				}
-			}
+		if len(result) > 0 {
+			return result
 		}
 	}
 
-	log.Debugf("GetModelProviders: result for modelID=%s: %v", modelID, foundProviders)
-	return foundProviders
+	// Fallback: direct model lookup
+	return r.getModelProvidersInternal(modelID)
 }
 
 // GetModelInfo returns the registered ModelInfo for the given model ID, if present.

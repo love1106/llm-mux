@@ -8,7 +8,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/nghyane/llm-mux/internal/interfaces"
-	"github.com/nghyane/llm-mux/internal/registry"
 	"github.com/nghyane/llm-mux/internal/util"
 	coreauth "github.com/nghyane/llm-mux/sdk/cliproxy/auth"
 	coreexecutor "github.com/nghyane/llm-mux/sdk/cliproxy/executor"
@@ -216,13 +215,9 @@ func (h *BaseAPIHandler) getRequestDetails(modelName string) (providers []string
 	} else if specifiedProvider != "" {
 		providers = []string{specifiedProvider}
 	} else {
-		// Use registry's canonical index for unified routing
-		if resolved := h.resolveModelWithCanonical(normalizedModel); resolved != nil {
-			providers = resolved.Providers
-			normalizedModel = resolved.CanonicalModel
-		} else {
-			providers = util.GetProviderName(normalizedModel)
-		}
+		// GetProviderName uses canonical index for cross-provider routing
+		// Translation happens in executeWithProvider via GetModelIDForProvider
+		providers = util.GetProviderName(normalizedModel)
 	}
 
 	if len(providers) == 0 {
@@ -240,28 +235,6 @@ func (h *BaseAPIHandler) parseDynamicModel(modelName string) (providerName, mode
 		}
 	}
 	return "", modelName, false
-}
-
-// resolveModelWithCanonical uses registry's canonical index to find all providers
-// and their specific model IDs for a given model name.
-type modelResolution struct {
-	Providers      []string // All available providers
-	CanonicalModel string   // Canonical model ID for translation
-}
-
-func (h *BaseAPIHandler) resolveModelWithCanonical(modelName string) *modelResolution {
-	mappings := registry.GetGlobalRegistry().GetProvidersWithModelID(modelName)
-	if len(mappings) == 0 {
-		return nil
-	}
-
-	providers := make([]string, 0, len(mappings))
-	for _, m := range mappings {
-		providers = append(providers, m.Provider)
-	}
-
-	// Use the requested model name as canonical for translation
-	return &modelResolution{Providers: providers, CanonicalModel: modelName}
 }
 
 func cloneBytes(src []byte) []byte {
