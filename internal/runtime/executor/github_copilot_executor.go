@@ -110,6 +110,7 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 	}
 
 	// Translate response back from OpenAI format to source format
+	log.Infof("GitHubCopilotExecutor: translating response from OpenAI to source format - from=%q (from.String()=%q)", from, from.String())
 	translatedResp, errTranslate := TranslateOpenAIResponseNonStream(e.cfg, from, data, req.Model)
 	if errTranslate != nil {
 		return resp, errTranslate
@@ -188,6 +189,7 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 			}
 
 			// Translate stream chunk from OpenAI format
+			log.Infof("GitHubCopilotExecutor streaming: translating chunk from OpenAI to source format - from=%q (from.String()=%q)", from, from.String())
 			translatedChunks, errTranslate := TranslateOpenAIResponseStream(e.cfg, from, bytes.Clone(line), req.Model, messageID, streamState)
 			if errTranslate != nil {
 				out <- cliproxyexecutor.StreamChunk{Err: errTranslate}

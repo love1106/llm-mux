@@ -11,6 +11,7 @@ import (
 	"github.com/nghyane/llm-mux/internal/translator/ir"
 	"github.com/nghyane/llm-mux/internal/translator/to_ir"
 	sdktranslator "github.com/nghyane/llm-mux/sdk/translator"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -899,10 +900,12 @@ func TranslateOpenAIResponseStream(cfg *config.Config, to sdktranslator.Format, 
 
 	// Step 2: Convert IR events to target format chunks
 	toStr := to.String()
+	log.Infof("TranslateOpenAIResponseStream: to format object=%+v, to.String()=%q", to, toStr)
 	var chunks [][]byte
 
 	switch toStr {
 	case "openai", "cline":
+		log.Infof("TranslateOpenAIResponseStream: converting to OpenAI format")
 		if state == nil {
 			state = &OpenAIStreamState{}
 		}
@@ -935,7 +938,19 @@ func TranslateOpenAIResponseStream(cfg *config.Config, to sdktranslator.Format, 
 				chunks = append(chunks, chunk)
 			}
 		}
+	case "gemini", "gemini-cli":
+		log.Infof("TranslateOpenAIResponseStream: converting to Gemini format")
+		for _, event := range events {
+			chunk, err := from_ir.ToGeminiChunk(event, model)
+			if err != nil {
+				return nil, err
+			}
+			if chunk != nil {
+				chunks = append(chunks, chunk)
+			}
+		}
 	case "ollama":
+		log.Infof("TranslateOpenAIResponseStream: converting to Ollama format")
 		for _, event := range events {
 			chunk, err := from_ir.ToOllamaChatChunk(event, model)
 			if err != nil {
@@ -945,8 +960,20 @@ func TranslateOpenAIResponseStream(cfg *config.Config, to sdktranslator.Format, 
 				chunks = append(chunks, chunk)
 			}
 		}
+	case "claude":
+		log.Infof("TranslateOpenAIResponseStream: converting to Claude format")
+		for _, event := range events {
+			claudeChunks, err := from_ir.ToClaudeSSE(event, model, messageID, &from_ir.ClaudeStreamState{})
+			if err != nil {
+				return nil, err
+			}
+			if claudeChunks != nil {
+				chunks = append(chunks, claudeChunks)
+			}
+		}
 	default:
 		// Unsupported target format, return nil to trigger fallback
+		log.Infof("TranslateOpenAIResponseStream: unsupported target format %q, falling back to original response", toStr)
 		return nil, nil
 	}
 
@@ -958,20 +985,31 @@ func TranslateOpenAIResponseNonStream(cfg *config.Config, to sdktranslator.Forma
 	// Step 1: Parse OpenAI response to IR
 	messages, usage, err := to_ir.ParseOpenAIResponse(openaiResponse)
 	if err != nil {
+		log.Infof("TranslateOpenAIResponseNonStream: parse error: %v", err)
 		return nil, err
 	}
 
 	// Step 2: Convert IR to target format
 	toStr := to.String()
+	log.Infof("TranslateOpenAIResponseNonStream: to format object=%+v, to.String()=%q", to, toStr)
 	messageID := "chatcmpl-" + model // Simple ID generation
 
 	switch toStr {
 	case "openai", "cline":
+		log.Infof("TranslateOpenAIResponseNonStream: converting to OpenAI format")
 		return from_ir.ToOpenAIChatCompletion(messages, usage, model, messageID)
+	case "gemini", "gemini-cli":
+		log.Infof("TranslateOpenAIResponseNonStream: converting to Gemini format")
+		return from_ir.ToGeminiResponse(messages, usage, model)
 	case "ollama":
+		log.Infof("TranslateOpenAIResponseNonStream: converting to Ollama format")
 		return from_ir.ToOllamaChatResponse(messages, usage, model)
+	case "claude":
+		log.Infof("TranslateOpenAIResponseNonStream: converting to Claude format")
+		return from_ir.ToClaudeResponse(messages, usage, model, messageID)
 	default:
 		// Unsupported target format, return nil to trigger fallback
+		log.Infof("TranslateOpenAIResponseNonStream: unsupported target format %q, falling back to original response", toStr)
 		return nil, nil
 	}
 }
