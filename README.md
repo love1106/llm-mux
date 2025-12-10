@@ -160,7 +160,7 @@ curl http://localhost:8318/v1/chat/completions -H "Content-Type: application/jso
 **Gemini format:**
 ```bash
 curl http://localhost:8318/v1beta/models/gemini-2.5-flash:generateContent -H "Content-Type: application/json" \
-  -d '{"contents": [{"parts": [{"text": "Hello"}]}]}'
+  -d '{"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]}'
 ```
 
 **Ollama format:**
