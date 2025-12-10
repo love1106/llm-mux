@@ -38,14 +38,14 @@ curl http://localhost:8318/v1/chat/completions \
 | Provider | Auth | Key Models |
 |----------|------|------------|
 | **Gemini CLI** | OAuth | gemini-2.5-pro, gemini-2.5-flash, gemini-3-pro-preview |
-| **AI Studio** | OAuth | gemini-2.5-pro, gemini-*-image |
-| **Antigravity** | OAuth | gemini-claude-sonnet-4-5, gemini-claude-opus-4-5-thinking |
+| **AI Studio** | OAuth | gemini-2.5-pro, gemini-2.5-flash, gemini-3-pro-preview, gemini-*-image |
+| **Antigravity** | OAuth | All Gemini models + gemini-claude-sonnet-4-5, gemini-claude-opus-4-5-thinking |
 | **Claude** | OAuth | claude-sonnet-4-5, claude-opus-4-5 |
 | **OpenAI Codex** | OAuth | gpt-5.1, gpt-5.1-codex, gpt-5.1-codex-max |
 | **GitHub Copilot** | OAuth | gpt-4.1, gpt-4o, gpt-5-mini, gpt-5.1-codex-max |
 | **Kiro** | OAuth | claude-sonnet-4-5, claude-opus-4-5 (via Amazon Q) |
 | **iFlow** | OAuth | qwen3-coder-plus, deepseek-r1, kimi-k2 |
-| **Vertex AI** | API Key | Gemini models |
+| **Vertex AI** | API Key | gemini-2.5-pro, gemini-2.5-flash, gemini-3-pro-preview |
 
 ## Features
 
