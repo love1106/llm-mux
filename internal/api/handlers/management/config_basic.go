@@ -56,6 +56,10 @@ func (h *Handler) GetLatestVersion(c *gin.Context) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", latestReleaseUserAgent)
+	// Use GitHub token from env to increase rate limit (60/hr → 5000/hr)
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
