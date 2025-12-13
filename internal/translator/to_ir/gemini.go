@@ -632,8 +632,13 @@ func ParseGeminiChunkWithContext(rawJSON []byte, schemaCtx *ir.ToolSchemaContext
 	}
 
 	var groundingMeta *ir.GroundingMetadata
+	// groundingMetadata can be at root level OR inside candidates[0]
 	if gm := parsed.Get("groundingMetadata"); gm.Exists() {
 		groundingMeta = parseGroundingMetadata(gm)
+	} else if candidates := parsed.Get("candidates").Array(); len(candidates) > 0 {
+		if gm := candidates[0].Get("groundingMetadata"); gm.Exists() {
+			groundingMeta = parseGroundingMetadata(gm)
+		}
 	}
 
 	// Emit Finish event ONLY if we have an explicit finish reason from Gemini.
