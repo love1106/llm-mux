@@ -358,6 +358,18 @@ func ToOpenAIChatCompletionCandidates(candidates []ir.CandidateResult, usage *ir
 		response["usage"] = usageMap
 	}
 
+	// Add grounding metadata from meta or first candidate with grounding
+	if meta != nil && meta.GroundingMetadata != nil {
+		response["grounding_metadata"] = buildOpenAIGroundingMetadata(meta.GroundingMetadata)
+	} else {
+		for _, candidate := range candidates {
+			if candidate.GroundingMetadata != nil {
+				response["grounding_metadata"] = buildOpenAIGroundingMetadata(candidate.GroundingMetadata)
+				break
+			}
+		}
+	}
+
 	return json.Marshal(response)
 }
 
@@ -417,6 +429,11 @@ func ToOpenAIChatCompletionMeta(messages []ir.Message, usage *ir.Usage, model, m
 			usageMap["completion_tokens_details"] = map[string]any{"reasoning_tokens": thoughtsTokens}
 		}
 		response["usage"] = usageMap
+	}
+
+	// Add grounding metadata if present (for Google Search grounding)
+	if meta != nil && meta.GroundingMetadata != nil {
+		response["grounding_metadata"] = buildOpenAIGroundingMetadata(meta.GroundingMetadata)
 	}
 
 	return json.Marshal(response)
@@ -579,6 +596,10 @@ func ToOpenAIChunkMeta(event ir.UnifiedEvent, model, messageID string, chunkInde
 			}
 
 			chunk["usage"] = usageMap
+		}
+		// Add grounding metadata in final streaming chunk
+		if event.GroundingMetadata != nil {
+			chunk["grounding_metadata"] = buildOpenAIGroundingMetadata(event.GroundingMetadata)
 		}
 	case ir.EventTypeError:
 		return nil, fmt.Errorf("stream error: %v", event.Error)
@@ -749,6 +770,11 @@ func ToResponsesAPIResponse(messages []ir.Message, usage *ir.Usage, model string
 			responsesUsage["output_tokens_details"] = map[string]any{"reasoning_tokens": thoughtsTokens}
 		}
 		response["usage"] = responsesUsage
+	}
+
+	// Add grounding metadata if present
+	if meta != nil && meta.GroundingMetadata != nil {
+		response["grounding_metadata"] = buildOpenAIGroundingMetadata(meta.GroundingMetadata)
 	}
 
 	return json.Marshal(response)
@@ -950,4 +976,69 @@ func ToResponsesAPIChunk(event ir.UnifiedEvent, model string, state *ResponsesSt
 	}
 
 	return out, nil
+}
+
+// buildOpenAIGroundingMetadata converts GroundingMetadata to OpenAI-compatible format.
+// This is an extension for Google Search grounding results in OpenAI format responses.
+func buildOpenAIGroundingMetadata(gm *ir.GroundingMetadata) map[string]any {
+	if gm == nil {
+		return nil
+	}
+
+	result := map[string]any{}
+
+	if len(gm.WebSearchQueries) > 0 {
+		result["web_search_queries"] = gm.WebSearchQueries
+	}
+
+	if gm.SearchEntryPoint != nil && gm.SearchEntryPoint.RenderedContent != "" {
+		result["search_entry_point"] = map[string]any{
+			"rendered_content": gm.SearchEntryPoint.RenderedContent,
+		}
+	}
+
+	if len(gm.GroundingChunks) > 0 {
+		var sources []map[string]any
+		for _, chunk := range gm.GroundingChunks {
+			if chunk.Web != nil {
+				source := map[string]any{
+					"type":  "web",
+					"uri":   chunk.Web.URI,
+					"title": chunk.Web.Title,
+				}
+				if chunk.Web.Domain != "" {
+					source["domain"] = chunk.Web.Domain
+				}
+				sources = append(sources, source)
+			}
+		}
+		if len(sources) > 0 {
+			result["sources"] = sources
+		}
+	}
+
+	if len(gm.GroundingSupports) > 0 {
+		var citations []map[string]any
+		for _, s := range gm.GroundingSupports {
+			citation := map[string]any{}
+			if s.Segment != nil {
+				citation["text"] = s.Segment.Text
+				if s.Segment.StartIndex > 0 {
+					citation["start_index"] = s.Segment.StartIndex
+				}
+				if s.Segment.EndIndex > 0 {
+					citation["end_index"] = s.Segment.EndIndex
+				}
+			}
+			if len(s.GroundingChunkIndices) > 0 {
+				citation["source_indices"] = s.GroundingChunkIndices
+			}
+			citations = append(citations, citation)
+		}
+		if len(citations) > 0 {
+			result["citations"] = citations
+		}
+	}
+
+	return result
 }

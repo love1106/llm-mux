@@ -603,6 +603,11 @@ func (p *GeminiProvider) fixImageAspectRatioForPreview(root map[string]any, aspe
 
 // ToGeminiResponse converts messages to a complete Gemini API response.
 func ToGeminiResponse(messages []ir.Message, usage *ir.Usage, model string) ([]byte, error) {
+	return ToGeminiResponseMeta(messages, usage, model, nil)
+}
+
+// ToGeminiResponseMeta converts messages to a complete Gemini API response with metadata.
+func ToGeminiResponseMeta(messages []ir.Message, usage *ir.Usage, model string, meta *ir.OpenAIMeta) ([]byte, error) {
 	builder := ir.NewResponseBuilder(messages, usage, model)
 
 	response := map[string]any{
@@ -610,16 +615,21 @@ func ToGeminiResponse(messages []ir.Message, usage *ir.Usage, model string) ([]b
 		"modelVersion": model,
 	}
 
+	candidate := map[string]any{
+		"content": map[string]any{
+			"role":  "model",
+			"parts": builder.BuildGeminiContentParts(),
+		},
+		"finishReason": "STOP",
+	}
+
+	// Add grounding metadata to candidate if present
+	if meta != nil && meta.GroundingMetadata != nil {
+		candidate["groundingMetadata"] = buildGroundingMetadataMap(meta.GroundingMetadata)
+	}
+
 	if builder.HasContent() {
-		response["candidates"] = []any{
-			map[string]any{
-				"content": map[string]any{
-					"role":  "model",
-					"parts": builder.BuildGeminiContentParts(),
-				},
-				"finishReason": "STOP",
-			},
-		}
+		response["candidates"] = []any{candidate}
 	}
 
 	if usage != nil {

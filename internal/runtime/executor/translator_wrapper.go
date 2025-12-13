@@ -439,6 +439,7 @@ func TranslateGeminiCLIResponseNonStream(cfg *config.Config, to sdktranslator.Fo
 				ResponseID:         meta.ResponseID,
 				CreateTime:         meta.CreateTime,
 				NativeFinishReason: meta.NativeFinishReason,
+				GroundingMetadata:  meta.GroundingMetadata,
 			}
 			if usage != nil {
 				openaiMeta.ThoughtsTokenCount = usage.ThoughtsTokenCount
@@ -447,18 +448,25 @@ func TranslateGeminiCLIResponseNonStream(cfg *config.Config, to sdktranslator.Fo
 		return from_ir.ToOpenAIChatCompletionCandidates(candidates, usage, model, messageID, openaiMeta)
 	}
 
-	// Step 1: Parse Gemini CLI response to IR (single candidate)
-	messages, usage, err := (&from_ir.GeminiCLIProvider{}).ParseResponse(geminiResponse)
+	// Step 1: Parse Gemini CLI response to IR (single candidate) with meta for grounding
+	messages, usage, meta, err := to_ir.ParseGeminiResponseMetaWithContext(geminiResponse, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	// Step 2: Convert IR to target format
 	messageID := "chatcmpl-" + model
+	var openaiMeta *ir.OpenAIMeta
+	if meta != nil {
+		if meta.ResponseID != "" {
+			messageID = meta.ResponseID
+		}
+		openaiMeta = meta
+	}
 
 	switch toStr {
 	case "openai", "cline":
-		return from_ir.ToOpenAIChatCompletion(messages, usage, model, messageID)
+		return from_ir.ToOpenAIChatCompletionMeta(messages, usage, model, messageID, openaiMeta)
 	case "claude":
 		return from_ir.ToClaudeResponse(messages, usage, model, messageID)
 	case "ollama":
@@ -642,6 +650,7 @@ func TranslateGeminiResponseNonStream(cfg *config.Config, to sdktranslator.Forma
 				ResponseID:         meta.ResponseID,
 				CreateTime:         meta.CreateTime,
 				NativeFinishReason: meta.NativeFinishReason,
+				GroundingMetadata:  meta.GroundingMetadata,
 			}
 			if usage != nil {
 				openaiMeta.ThoughtsTokenCount = usage.ThoughtsTokenCount
@@ -671,6 +680,7 @@ func TranslateGeminiResponseNonStream(cfg *config.Config, to sdktranslator.Forma
 				CreateTime:         meta.CreateTime,
 				NativeFinishReason: meta.NativeFinishReason,
 				Logprobs:           meta.Logprobs,
+				GroundingMetadata:  meta.GroundingMetadata,
 			}
 			if usage != nil {
 				openaiMeta.ThoughtsTokenCount = usage.ThoughtsTokenCount
