@@ -314,42 +314,59 @@ func (p *GeminiProvider) applyMessages(root map[string]any, req *ir.UnifiedChatR
 			var responseParts []any
 
 			if len(msg.ToolCalls) > 0 {
-				// Claude Constraint: If using tools, MUST start with thinking block.
-				// If history lacks thinking (due to previous errors/bugs), we must inject a Shim
-				// so the user can continue with Thinking enabled.
 				isClaude := strings.Contains(req.Model, "claude")
-				if isClaude && !hasThinking {
-					parts = append([]any{map[string]any{
-						"text":              "Thinking content redated.",
-						"redacted_thinking": true,
-					}}, parts...)
-				}
 
 				toolCallIDs := make([]string, 0, len(msg.ToolCalls))
 
-				for i := range msg.ToolCalls {
-					tc := &msg.ToolCalls[i]
-					argsJSON := ir.ValidateAndNormalizeJSON(tc.Args)
-					fcMap := map[string]any{
-						"name": tc.Name,
-						"args": json.RawMessage(argsJSON),
+				// 2a. Handle Broken History (Claude + Tool - Thinking)
+				// If we are sending to Claude (which requires Thinking before Tools)
+				// and this historical message has NO thinking logic, we CANNOT send real tool calls.
+				// Any attempt to "shim" a thinking block will fail signature validation (Vertex/Antigravity).
+				// Solution: Convert these historical tool calls to [Text Representation] so context is preserved
+				// but protocol rules are not violated.
+				if isClaude && !hasThinking {
+					textParts := make([]string, 0, len(msg.ToolCalls))
+					for _, tc := range msg.ToolCalls {
+						args := ir.ValidateAndNormalizeJSON(tc.Args)
+						textParts = append(textParts, fmt.Sprintf("[Historical Tool Call: %s(args=%s)]", tc.Name, args))
 					}
-					toolID := tc.ID
-					if toolID == "" {
-						toolID = fmt.Sprintf("call_%d_%d", time.Now().UnixNano(), i)
-					}
-					fcMap["id"] = toolID
+					// Add explanation and tool dump to text part
+					parts = append(parts, map[string]any{
+						"text": fmt.Sprintf("\n%s", strings.Join(textParts, "\n")),
+					})
+					// DO NOT process as actual functionCall parts
+					// This effectively "downgrades" the tool call to text history
+				} else {
+					// 2b. Standard Tool Processing (Valid History or Non-Claude)
+					for i := range msg.ToolCalls {
+						tc := &msg.ToolCalls[i]
+						argsJSON := ir.ValidateAndNormalizeJSON(tc.Args)
+						fcMap := map[string]any{
+							"name": tc.Name,
+							"args": json.RawMessage(argsJSON),
+						}
+						toolID := tc.ID
+						if toolID == "" {
+							toolID = fmt.Sprintf("call_%d_%d", time.Now().UnixNano(), i)
+						}
+						fcMap["id"] = toolID
 
-					part := map[string]any{
-						"functionCall": fcMap,
+						part := map[string]any{
+							"functionCall": fcMap,
+						}
+						if len(tc.ThoughtSignature) > 0 {
+							part["thoughtSignature"] = string(tc.ThoughtSignature)
+						} else if i == 0 {
+							part["thoughtSignature"] = "skip_thought_signature_validator"
+						}
+						parts = append(parts, part)
+						toolCallIDs = append(toolCallIDs, toolID)
 					}
-					if len(tc.ThoughtSignature) > 0 {
-						part["thoughtSignature"] = string(tc.ThoughtSignature)
-					} else if i == 0 {
-						part["thoughtSignature"] = "skip_thought_signature_validator"
+
+					// If we processed real tool calls, we need to track IDs for the next turn
+					if len(toolCallIDs) > 0 {
+						// Logic to track toolCallIDs if needed for Response matching (usually handled by IR structure)
 					}
-					parts = append(parts, part)
-					toolCallIDs = append(toolCallIDs, toolID)
 				}
 
 				// Build Tool Results (User Response) based on IDs
