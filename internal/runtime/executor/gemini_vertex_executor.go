@@ -106,16 +106,10 @@ func (e *GeminiVertexExecutor) CountTokens(ctx context.Context, auth *cliproxyau
 // countTokensWithServiceAccount handles token counting using service account credentials.
 func (e *GeminiVertexExecutor) countTokensWithServiceAccount(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, projectID, location string, saJSON []byte) (cliproxyexecutor.Response, error) {
 	from := opts.SourceFormat
+	// Thinking config is handled by translator
 	translatedReq, err := TranslateToGemini(e.cfg, from, req.Model, bytes.Clone(req.Payload), false, req.Metadata)
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
-	}
-	if budgetOverride, includeOverride, ok := util.GeminiThinkingFromMetadata(req.Metadata); ok && util.ModelSupportsThinking(req.Model) {
-		if budgetOverride != nil {
-			norm := util.NormalizeThinkingBudget(req.Model, *budgetOverride)
-			budgetOverride = &norm
-		}
-		translatedReq = util.ApplyGeminiThinkingConfig(translatedReq, budgetOverride, includeOverride)
 	}
 	translatedReq = util.StripThinkingConfigIfUnsupported(req.Model, translatedReq)
 	respCtx := context.WithValue(ctx, altContextKey{}, opts.Alt)
@@ -171,16 +165,10 @@ func (e *GeminiVertexExecutor) countTokensWithServiceAccount(ctx context.Context
 // countTokensWithAPIKey handles token counting using API key credentials.
 func (e *GeminiVertexExecutor) countTokensWithAPIKey(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, apiKey, baseURL string) (cliproxyexecutor.Response, error) {
 	from := opts.SourceFormat
+	// Thinking config is handled by translator
 	translatedReq, err := TranslateToGemini(e.cfg, from, req.Model, bytes.Clone(req.Payload), false, req.Metadata)
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
-	}
-	if budgetOverride, includeOverride, ok := util.GeminiThinkingFromMetadata(req.Metadata); ok && util.ModelSupportsThinking(req.Model) {
-		if budgetOverride != nil {
-			norm := util.NormalizeThinkingBudget(req.Model, *budgetOverride)
-			budgetOverride = &norm
-		}
-		translatedReq = util.ApplyGeminiThinkingConfig(translatedReq, budgetOverride, includeOverride)
 	}
 	translatedReq = util.StripThinkingConfigIfUnsupported(req.Model, translatedReq)
 	respCtx := context.WithValue(ctx, altContextKey{}, opts.Alt)
@@ -245,17 +233,10 @@ func (e *GeminiVertexExecutor) executeWithServiceAccount(ctx context.Context, au
 	defer reporter.trackFailure(ctx, &err)
 
 	from := opts.SourceFormat
+	// Thinking config is now handled by the translator (including auto-apply for Claude)
 	body, err := TranslateToGemini(e.cfg, from, req.Model, bytes.Clone(req.Payload), false, req.Metadata)
 	if err != nil {
 		return resp, err
-	}
-	// Apply thinking config from metadata (TranslateToGemini handles basic thinking, but metadata overrides need manual apply)
-	if budgetOverride, includeOverride, ok := util.GeminiThinkingFromMetadata(req.Metadata); ok && util.ModelSupportsThinking(req.Model) {
-		if budgetOverride != nil {
-			norm := util.NormalizeThinkingBudget(req.Model, *budgetOverride)
-			budgetOverride = &norm
-		}
-		body = util.ApplyGeminiThinkingConfig(body, budgetOverride, includeOverride)
 	}
 	body = util.StripThinkingConfigIfUnsupported(req.Model, body)
 
@@ -325,16 +306,10 @@ func (e *GeminiVertexExecutor) executeWithAPIKey(ctx context.Context, auth *clip
 	defer reporter.trackFailure(ctx, &err)
 
 	from := opts.SourceFormat
+	// Thinking config is now handled by the translator (including auto-apply for Claude)
 	body, err := TranslateToGemini(e.cfg, from, req.Model, bytes.Clone(req.Payload), false, req.Metadata)
 	if err != nil {
 		return resp, err
-	}
-	if budgetOverride, includeOverride, ok := util.GeminiThinkingFromMetadata(req.Metadata); ok && util.ModelSupportsThinking(req.Model) {
-		if budgetOverride != nil {
-			norm := util.NormalizeThinkingBudget(req.Model, *budgetOverride)
-			budgetOverride = &norm
-		}
-		body = util.ApplyGeminiThinkingConfig(body, budgetOverride, includeOverride)
 	}
 	body = util.StripThinkingConfigIfUnsupported(req.Model, body)
 
@@ -405,16 +380,10 @@ func (e *GeminiVertexExecutor) executeStreamWithServiceAccount(ctx context.Conte
 	defer reporter.trackFailure(ctx, &err)
 
 	from := opts.SourceFormat
+	// Thinking config is now handled by the translator (including auto-apply for Claude)
 	body, err := TranslateToGemini(e.cfg, from, req.Model, bytes.Clone(req.Payload), true, req.Metadata)
 	if err != nil {
 		return nil, err
-	}
-	if budgetOverride, includeOverride, ok := util.GeminiThinkingFromMetadata(req.Metadata); ok && util.ModelSupportsThinking(req.Model) {
-		if budgetOverride != nil {
-			norm := util.NormalizeThinkingBudget(req.Model, *budgetOverride)
-			budgetOverride = &norm
-		}
-		body = util.ApplyGeminiThinkingConfig(body, budgetOverride, includeOverride)
 	}
 	body = util.StripThinkingConfigIfUnsupported(req.Model, body)
 
@@ -504,16 +473,10 @@ func (e *GeminiVertexExecutor) executeStreamWithAPIKey(ctx context.Context, auth
 	defer reporter.trackFailure(ctx, &err)
 
 	from := opts.SourceFormat
+	// Thinking config is now handled by the translator (including auto-apply for Claude)
 	body, err := TranslateToGemini(e.cfg, from, req.Model, bytes.Clone(req.Payload), true, req.Metadata)
 	if err != nil {
 		return nil, err
-	}
-	if budgetOverride, includeOverride, ok := util.GeminiThinkingFromMetadata(req.Metadata); ok && util.ModelSupportsThinking(req.Model) {
-		if budgetOverride != nil {
-			norm := util.NormalizeThinkingBudget(req.Model, *budgetOverride)
-			budgetOverride = &norm
-		}
-		body = util.ApplyGeminiThinkingConfig(body, budgetOverride, includeOverride)
 	}
 	body = util.StripThinkingConfigIfUnsupported(req.Model, body)
 

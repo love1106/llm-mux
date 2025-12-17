@@ -94,41 +94,91 @@ func (p *GeminiProvider) applyGenerationConfig(root map[string]any, req *ir.Unif
 		genConfig["candidateCount"] = *req.CandidateCount
 	}
 
-	// Check if model is Gemini 3 family (gemini-3-pro-preview, gemini-3-pro-high, etc.)
+	// Check models
 	isGemini3 := strings.HasPrefix(req.Model, "gemini-3")
-	if util.ModelSupportsThinking(req.Model) || isGemini3 {
-		if req.Thinking != nil {
-			if isGemini3 {
-				// Gemini 3 Pro uses thinking_level (always include thoughts for readable text)
-				tc := map[string]any{
-					"includeThoughts": true,
-				}
-				switch req.Thinking.Effort {
+	isClaude := strings.Contains(req.Model, "claude")
+
+	// Determine effective thinking config (handling auto-apply)
+	var effectiveThinking *ir.ThinkingConfig
+	if req.Thinking != nil {
+		effectiveThinking = req.Thinking
+	} else if util.ModelSupportsThinking(req.Model) || isClaude {
+		defaultBudget := util.DefaultThinkingBudget
+		if isClaude {
+			defaultBudget = 16000
+		}
+
+		budget, include, auto := util.GetAutoAppliedThinkingConfig(req.Model)
+		if isClaude {
+			auto = true
+			include = true
+			budget = defaultBudget
+		}
+
+		if auto {
+			b := int32(budget)
+			effectiveThinking = &ir.ThinkingConfig{
+				IncludeThoughts: include,
+				ThinkingBudget:  &b,
+			}
+		}
+	} else if isGemini3 {
+		effectiveThinking = &ir.ThinkingConfig{IncludeThoughts: true}
+	}
+
+	if effectiveThinking != nil {
+		if isGemini3 {
+			// Gemini 3 Pro uses thinking_level
+			tc := map[string]any{
+				"includeThoughts": true,
+			}
+			if effectiveThinking.Effort != "" {
+				switch effectiveThinking.Effort {
 				case ir.ReasoningEffortLow:
 					tc["thinking_level"] = "LOW"
 				case ir.ReasoningEffortHigh:
 					tc["thinking_level"] = "HIGH"
 				}
-				// If budget is set but not effort, ignore budget for Gemini 3 as per docs
-				genConfig["thinkingConfig"] = tc
-			} else {
-				// Gemini 2.5 and others use thinking_budget (always include thoughts for readable text)
-				budget := int32(0)
-				if req.Thinking.ThinkingBudget != nil {
-					budget = *req.Thinking.ThinkingBudget
-				}
-				if budget > 0 {
-					budget = int32(util.NormalizeThinkingBudget(req.Model, int(budget)))
-				}
-				genConfig["thinkingConfig"] = map[string]any{
-					"thinkingBudget":  budget,
-					"includeThoughts": true,
-				}
 			}
-		} else if isGemini3 {
-			// Gemini 3 default: include thoughts for readable text (no thinkingBudget needed)
+			genConfig["thinkingConfig"] = tc
+		} else {
+			// Gemini 2.5 and Claude use thinking_budget
+			budget := int32(0)
+			if effectiveThinking.ThinkingBudget != nil {
+				budget = *effectiveThinking.ThinkingBudget
+			}
+			if budget > 0 {
+				budget = int32(util.NormalizeThinkingBudget(req.Model, int(budget)))
+			}
+
+			includeKey := "includeThoughts"
+			if isClaude {
+				includeKey = "include_thoughts"
+			}
+
 			genConfig["thinkingConfig"] = map[string]any{
-				"includeThoughts": true,
+				"thinkingBudget": budget,
+				includeKey:       true,
+			}
+
+			// MaxTokens adjustment logic (MaxMinMax strategy)
+			if budget > 0 {
+				currentMax := 0
+				if v, ok := genConfig["maxOutputTokens"].(int); ok {
+					currentMax = v
+				} else if v32, ok := genConfig["maxOutputTokens"].(int32); ok {
+					currentMax = int(v32)
+				} else if req.MaxTokens != nil {
+					currentMax = *req.MaxTokens
+				}
+
+				safeMax := 32000
+				budgetInt := int(budget)
+				newMax := max(currentMax, budgetInt*2, safeMax)
+
+				if newMax > currentMax {
+					genConfig["maxOutputTokens"] = newMax
+				}
 			}
 		}
 	}

@@ -4,37 +4,9 @@ import (
 	"strings"
 
 	"github.com/nghyane/llm-mux/internal/config"
-	"github.com/nghyane/llm-mux/internal/util"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
-
-// applyThinkingMetadataCLI applies thinking config from model suffix metadata (e.g., -reasoning, -thinking-N)
-// for Gemini CLI format payloads (nested under "request"). It normalizes the budget when the model supports thinking.
-// Also auto-applies thinking config for models that support thinking (per registry) but have no explicit metadata,
-// such as Claude thinking models (e.g., claude-sonnet-4-5-thinking).
-func applyThinkingMetadataCLI(payload []byte, metadata map[string]any, model string) []byte {
-	budgetOverride, includeOverride, ok := util.GeminiThinkingFromMetadata(metadata)
-
-	// If no explicit thinking metadata from suffix parsing, check if model supports thinking
-	// and auto-apply default thinking config (e.g., for Claude thinking models)
-	if !ok {
-		if budget, include, auto := util.GetAutoAppliedThinkingConfig(model); auto {
-			budgetOverride = &budget
-			includeOverride = &include
-			ok = true
-		}
-	}
-
-	if !ok {
-		return payload
-	}
-	if budgetOverride != nil && util.ModelSupportsThinking(model) {
-		norm := util.NormalizeThinkingBudget(model, *budgetOverride)
-		budgetOverride = &norm
-	}
-	return util.ApplyGeminiCLIThinkingConfig(payload, budgetOverride, includeOverride)
-}
 
 // applyPayloadConfig applies payload default and override rules from configuration
 // to the given JSON payload for the specified model.
