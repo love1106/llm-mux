@@ -115,6 +115,9 @@ func ParseClaudeRequest(rawJSON []byte) (*ir.UnifiedChatRequest, error) {
 			if budget := thinking.Get("budget_tokens"); budget.Exists() {
 				b := int32(budget.Int())
 				req.Thinking.ThinkingBudget = &b
+			} else if budget := thinking.Get("budgetTokens"); budget.Exists() {
+				b := int32(budget.Int())
+				req.Thinking.ThinkingBudget = &b
 			}
 			// Note: -1 for auto is not needed with pointer - nil means auto
 		} else if thinking.Get("type").String() == "disabled" {
