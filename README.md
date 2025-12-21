@@ -32,7 +32,7 @@ graph LR
     subgraph "Your Tools"
         A[Cursor]
         B[Cline]
-        C[Aider]
+        C[Claude Code]
         D[Python/LangChain]
     end
     
@@ -173,7 +173,7 @@ Settings → Models → OpenAI API Base URL → http://localhost:8318/v1
 Settings → API Provider → OpenAI Compatible → http://localhost:8318/v1
 ```
 
-### Aider
+### Claude Code
 
 ```bash
 aider --openai-api-base http://localhost:8318/v1 --model gemini-2.5-pro
@@ -393,7 +393,7 @@ gemini-api-key:
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Your Application                         │
-│                   (Cursor, Aider, Python, etc.)                 │
+│                   (Cursor, Claude Code, Python, etc.)                 │
 └─────────────────────────────────────────────────────────────────┘
                                │
                                ▼ Intermediate Representation (IR)
