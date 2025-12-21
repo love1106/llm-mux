@@ -437,6 +437,16 @@ gemini-api-key:
 
 ---
 
+## Keywords
+
+**Subscription Conversion:** claude-pro, github-copilot, antigravity, subscription-to-api, gemini-2.5, gpt-5  
+**AI Tools:** cursor, cline, aider, continue.dev, windsurf, vscode  
+**API Integration:** openai-compatible, api-gateway, local-proxy, oauth  
+**AI Models:** claude-sonnet-4, gemini-3-flash, gpt-5.1-codex-max  
+**Use Cases:** ai-coding, developer-tools, langchain, python-sdk
+
+---
+
 ## License
 
 MIT License — see [LICENSE](LICENSE)
