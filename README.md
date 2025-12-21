@@ -5,7 +5,7 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue)](https://github.com/nghyane/llm-mux)
 [![Go Version](https://img.shields.io/badge/go-1.25-cyan)](https://golang.org)
 
-**Turn your existing AI subscriptions into API endpoints.** A local gateway that converts Claude Pro, GitHub Copilot, and Google Cloud Code subscriptions into OpenAI-compatible APIs.
+**Turn your existing AI subscriptions into API endpoints.** A local gateway that converts Claude Pro, GitHub Copilot, and Google Antigravity subscriptions into OpenAI-compatible APIs.
 
 > No separate API billing. No per-token charges. Use the subscriptions you already pay for.
 
@@ -19,7 +19,7 @@ You're paying for AI subscriptions but can't use them programmatically:
 |:-------------|:-------------|:-------------|
 | **Claude Pro/Max** | $20-100/month | Web/app access only |
 | **GitHub Copilot** | $10-19/month | IDE integration only |
-| **Google Cloud Code** | Free tier | Gemini in IDE only |
+| **Google Antigravity** | Free tier | Gemini in IDE only |
 
 Meanwhile, API access costs **extra** — often $20+/month per provider, billed per token.
 
@@ -43,7 +43,7 @@ graph LR
     subgraph "Your Subscriptions"
         F[Claude Pro/Max]
         G[GitHub Copilot]
-        H[Google Cloud Code]
+        H[Google Antigravity]
         I[More Providers]
     end
     
@@ -250,7 +250,7 @@ llm-mux supports multiple API formats for maximum compatibility:
 ```bash
 # Google Gemini
 llm-mux --login              # Gemini CLI (2.5 Pro/Flash)
-llm-mux --antigravity-login  # Google Cloud Code (2.5/3.0 series)
+llm-mux --antigravity-login  # Google Antigravity (2.5/3.0 series)
 
 # Anthropic
 llm-mux --claude-login       # Claude Pro/Max subscription
