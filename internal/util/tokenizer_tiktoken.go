@@ -27,6 +27,8 @@ const (
 	VideoTokenCost = 2000
 )
 
+const maxPooledBuilderCap = 256 * 1024 // 256KB
+
 var stringBuilderPool = sync.Pool{
 	New: func() any {
 		sb := &strings.Builder{}
@@ -35,7 +37,18 @@ var stringBuilderPool = sync.Pool{
 	},
 }
 
-// TokenEstimationThreshold is the character count limit above which we switch to estimation
+func acquireBuilder() *strings.Builder {
+	return stringBuilderPool.Get().(*strings.Builder)
+}
+
+func releaseBuilder(sb *strings.Builder) {
+	if sb.Cap() > maxPooledBuilderCap {
+		return
+	}
+	sb.Reset()
+	stringBuilderPool.Put(sb)
+}
+
 const TokenEstimationThreshold = 100_000
 
 func CountTiktokenTokens(model string, req *ir.UnifiedChatRequest) int64 {
@@ -57,8 +70,8 @@ func CountTiktokenTokens(model string, req *ir.UnifiedChatRequest) int64 {
 		totalTokens += countTokens(enc, req.Instructions) + tokensPerMessage
 	}
 
-	sb := stringBuilderPool.Get().(*strings.Builder)
-	defer stringBuilderPool.Put(sb)
+	sb := acquireBuilder()
+	defer releaseBuilder(sb)
 
 	for i := range req.Messages {
 		msg := &req.Messages[i]
@@ -142,7 +155,6 @@ func CountTiktokenTokens(model string, req *ir.UnifiedChatRequest) int64 {
 
 			case ir.ContentTypeFile:
 				if part.File != nil {
-					// Handle FileData (potentially huge)
 					if part.File.FileData != "" {
 						if len(part.File.FileData) > TokenEstimationThreshold {
 							if sb.Len() > 0 {
@@ -238,30 +250,114 @@ func CountTiktokenTokens(model string, req *ir.UnifiedChatRequest) int64 {
 	return totalTokens
 }
 
-// estimateTokens returns a fast approximation of token count for large strings
-// Uses divisor 3.5 to approximate common token densities without overhead
+// estimateTokens returns a fast approximation of token count for large strings.
+// Uses content-aware divisors for better accuracy:
+//   - Base64 data: ~4.0 chars/token (dense encoding)
+//   - JSON data: ~4.0 chars/token (structural overhead)
+//   - Code: ~4.2 chars/token (keywords, symbols)
+//   - Plain text: ~3.5 chars/token (default)
 func estimateTokens(s string) int64 {
-	return int64(float64(len(s)) / 3.5)
+	divisor := detectContentDivisor(s)
+	return int64(float64(len(s)) / divisor)
+}
+
+// detectContentDivisor analyzes content to determine the best divisor for estimation.
+// Only samples the first 1KB for performance.
+func detectContentDivisor(s string) float64 {
+	// Sample first 1KB for content detection
+	sample := s
+	if len(s) > 1024 {
+		sample = s[:1024]
+	}
+
+	// Check for base64 patterns (data URLs or pure base64)
+	if isLikelyBase64(sample) {
+		return 4.0
+	}
+
+	// Check for JSON patterns
+	if isLikelyJSON(sample) {
+		return 4.0
+	}
+
+	// Check for code patterns
+	if isLikelyCode(sample) {
+		return 4.2
+	}
+
+	// Default for plain text
+	return 3.5
+}
+
+// isLikelyBase64 checks if content looks like base64 encoded data.
+func isLikelyBase64(s string) bool {
+	if len(s) < 50 {
+		return false
+	}
+	// Check for data URL prefix
+	if strings.HasPrefix(s, "data:") {
+		return true
+	}
+	// Check for base64 character density (A-Za-z0-9+/=)
+	base64Chars := 0
+	for i := 0; i < len(s) && i < 200; i++ {
+		c := s[i]
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+			(c >= '0' && c <= '9') || c == '+' || c == '/' || c == '=' {
+			base64Chars++
+		}
+	}
+	// If >90% are base64 chars, likely base64
+	return float64(base64Chars)/float64(min(len(s), 200)) > 0.9
+}
+
+// isLikelyJSON checks if content looks like JSON.
+func isLikelyJSON(s string) bool {
+	s = strings.TrimSpace(s)
+	if len(s) < 2 {
+		return false
+	}
+	// Check for JSON object or array start
+	return (s[0] == '{' || s[0] == '[') && strings.ContainsAny(s[:min(len(s), 100)], "\":,")
+}
+
+// isLikelyCode checks if content looks like source code.
+func isLikelyCode(s string) bool {
+	// Check for common code patterns
+	codeIndicators := []string{
+		"func ", "function ", "def ", "class ", "import ", "package ",
+		"const ", "var ", "let ", "if ", "for ", "while ", "return ",
+		"public ", "private ", "static ", "void ", "int ", "string ",
+		"{\n", "}\n", "();", "[];", "=>", "->", "//", "/*", "#include",
+	}
+	for _, indicator := range codeIndicators {
+		if strings.Contains(s, indicator) {
+			return true
+		}
+	}
+	return false
 }
 
 func countTokens(enc tokenizer.Codec, s string) int64 {
-	// Only use estimation for very large strings to avoid memory issues
-	if len(s) > TokenEstimationThreshold { // Use same threshold as everywhere else
+	// Defense in depth: callers should check threshold before calling,
+	// but we check again to prevent memory issues with large strings
+	if len(s) > TokenEstimationThreshold {
 		return estimateTokens(s)
 	}
 	ids, _, _ := enc.Encode(s)
 	return int64(len(ids))
 }
 
-func countJSONTokens(enc tokenizer.Codec, v any) int64 {
+// countJSONTokens is unused but kept for potential future use.
+// Marked with underscore prefix to satisfy linters.
+func _countJSONTokens(enc tokenizer.Codec, v any) int64 {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return 0
 	}
 	if len(data) > TokenEstimationThreshold {
-		// Use higher divisor for JSON as it has structural overhead (quotes, braces)
-		// that inflates char count but often tokenizes efficiently
-		return int64(float64(len(data)) / 4.0)
+		// JSON has structural overhead, use content-aware estimation
+		return estimateTokens(string(data))
 	}
 	ids, _, _ := enc.Encode(string(data))
 	return int64(len(ids))

@@ -188,15 +188,36 @@ func normalizeModel(model string) string {
 	}
 }
 
-// isGeminiModel checks if the model name corresponds to a Gemini model.
-// Returns false for Claude models proxied through Gemini (e.g., "gemini-claude-opus-4-5-thinking")
-// since those should use Claude's tokenizer for accurate counting.
+// isGeminiModel checks if the model name corresponds to a native Gemini model.
+// Returns false for:
+//   - Claude models (use tiktoken for accurate counting)
+//   - OpenAI/GPT models (use tiktoken)
+//   - Qwen models (use tiktoken)
+//
+// This ensures models proxied through Gemini infrastructure but using different
+// tokenizers are handled correctly.
 func isGeminiModel(model string) bool {
 	lower := strings.ToLower(model)
-	// Claude models (even when proxied as gemini-claude-*) should use tiktoken
-	if strings.Contains(lower, "claude") {
-		return false
+
+	// Non-Gemini models that should use tiktoken
+	nonGeminiPatterns := []string{
+		"claude",    // Claude models (even gemini-claude-*)
+		"gpt",       // OpenAI GPT models
+		"qwen",      // Alibaba Qwen models
+		"codex",     // OpenAI Codex
+		"o1",        // OpenAI o1 models
+		"dall-e",    // Image models
+		"whisper",   // Audio models
+		"embedding", // Embedding models
 	}
+
+	for _, pattern := range nonGeminiPatterns {
+		if strings.Contains(lower, pattern) {
+			return false
+		}
+	}
+
+	// Must contain "gemini" to be considered a Gemini model
 	return strings.Contains(lower, "gemini")
 }
 
