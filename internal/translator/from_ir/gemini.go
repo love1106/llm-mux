@@ -21,7 +21,6 @@ var debugToolCalls = os.Getenv("DEBUG_TOOL_CALLS") == "1"
 // GeminiProvider handles conversion to Gemini AI Studio API format.
 type GeminiProvider struct{}
 
-// ConvertRequest maps UnifiedChatRequest to Gemini AI Studio API JSON format.
 func (p *GeminiProvider) ConvertRequest(req *ir.UnifiedChatRequest) ([]byte, error) {
 	root := map[string]any{
 		"contents": []any{},
@@ -59,7 +58,6 @@ func (p *GeminiProvider) ConvertRequest(req *ir.UnifiedChatRequest) ([]byte, err
 	return json.Marshal(root)
 }
 
-// applyGenerationConfig sets temperature, topP, topK, maxTokens, thinking, modalities, and image config.
 func (p *GeminiProvider) applyGenerationConfig(root map[string]any, req *ir.UnifiedChatRequest) error {
 	genConfig := make(map[string]any)
 
@@ -156,7 +154,6 @@ func (p *GeminiProvider) applyGenerationConfig(root map[string]any, req *ir.Unif
 		}
 	} else {
 		// Logic for Claude/Gemini 2.5 (non-Gemini3)
-		// Apply explicit req.Thinking OR auto-apply
 		if req.Thinking != nil || auto {
 			// Send BOTH camelCase and snake_case to ensure upstream compatibility
 
@@ -530,7 +527,6 @@ func (p *GeminiProvider) buildAssistantAndToolParts(
 	return modelParts, responseParts
 }
 
-// applyTools converts tool definitions to Gemini functionDeclarations format.
 func (p *GeminiProvider) applyTools(root map[string]any, req *ir.UnifiedChatRequest) error {
 	// Extract built-in tools from Metadata (using ir.Meta* constants)
 	var googleSearch, googleSearchRetrieval, codeExecution, urlContext, fileSearch any
@@ -674,7 +670,6 @@ func (p *GeminiProvider) applyTools(root map[string]any, req *ir.UnifiedChatRequ
 	return nil
 }
 
-// applySafetySettings sets safety settings or applies defaults.
 func (p *GeminiProvider) applySafetySettings(root map[string]any, req *ir.UnifiedChatRequest) {
 	if len(req.SafetySettings) > 0 {
 		settings := make([]any, len(req.SafetySettings))
@@ -1015,9 +1010,7 @@ func buildGroundingMetadataMap(gm *ir.GroundingMetadata) map[string]any {
 // CLI format wraps AI Studio format: {"project":"", "model":"", "request":{...}}
 type GeminiCLIProvider struct{}
 
-// ConvertRequest converts UnifiedChatRequest to Gemini CLI JSON format.
 func (p *GeminiCLIProvider) ConvertRequest(req *ir.UnifiedChatRequest) ([]byte, error) {
-	// Build core Gemini AI Studio request
 	geminiJSON, err := (&GeminiProvider{}).ConvertRequest(req)
 	if err != nil {
 		return nil, err
@@ -1070,7 +1063,6 @@ func isValidThoughtSignature(ts []byte) bool {
 	return true
 }
 
-// buildFunctionResponseObject parses tool result into Gemini function response format.
 func buildFunctionResponseObject(result string, isError bool) any {
 	if result == "" {
 		if isError {
