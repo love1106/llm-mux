@@ -29,15 +29,20 @@ var (
 	cacheMu sync.RWMutex
 )
 
-// CredentialsDir returns the fixed credentials directory: ~/.config/llm-mux
+// CredentialsDir returns the credentials directory following XDG Base Directory spec.
+// Uses $XDG_CONFIG_HOME/llm-mux if set, otherwise ~/.config/llm-mux
 func CredentialsDir() string {
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "llm-mux")
+	}
 	if home, err := os.UserHomeDir(); err == nil {
 		return filepath.Join(home, ".config", "llm-mux")
 	}
 	return ""
 }
 
-// CredentialsFilePath returns the fixed path: ~/.config/llm-mux/credentials.json
+// CredentialsFilePath returns the credentials file path following XDG spec.
+// Uses $XDG_CONFIG_HOME/llm-mux/credentials.json if set, otherwise ~/.config/llm-mux/credentials.json
 func CredentialsFilePath() string {
 	dir := CredentialsDir()
 	if dir == "" {

@@ -32,11 +32,36 @@ func SetLogLevel(cfg *config.Config) {
 }
 
 // ResolveAuthDir normalizes the auth directory path for consistent reuse throughout the app.
-// It expands a leading tilde (~) to the user's home directory and returns a cleaned path.
+// It handles:
+//   - "$XDG_CONFIG_HOME/..." -> expands XDG_CONFIG_HOME env var
+//   - "~..." -> expands to user's home directory
+//   - Returns a cleaned absolute path
 func ResolveAuthDir(authDir string) (string, error) {
 	if authDir == "" {
 		return "", nil
 	}
+
+	// Handle $XDG_CONFIG_HOME prefix
+	if strings.HasPrefix(authDir, "$XDG_CONFIG_HOME") {
+		xdg := os.Getenv("XDG_CONFIG_HOME")
+		if xdg == "" {
+			// Fallback to ~/.config if XDG_CONFIG_HOME not set
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", fmt.Errorf("resolve auth dir: %w", err)
+			}
+			xdg = filepath.Join(home, ".config")
+		}
+		remainder := strings.TrimPrefix(authDir, "$XDG_CONFIG_HOME")
+		remainder = strings.TrimLeft(remainder, "/\\")
+		if remainder == "" {
+			return filepath.Clean(xdg), nil
+		}
+		normalized := strings.ReplaceAll(remainder, "\\", "/")
+		return filepath.Clean(filepath.Join(xdg, filepath.FromSlash(normalized))), nil
+	}
+
+	// Handle ~ prefix (legacy support)
 	if strings.HasPrefix(authDir, "~") {
 		home, err := os.UserHomeDir()
 		if err != nil {

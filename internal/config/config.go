@@ -306,7 +306,7 @@ type OpenAICompatibilityModel struct {
 func NewDefaultConfig() *Config {
 	return &Config{
 		Port:                   8317,
-		AuthDir:                "~/.config/llm-mux/auth",
+		AuthDir:                "$XDG_CONFIG_HOME/llm-mux/auth",
 		DisableAuth:            true, // Local-first: no API key required by default
 		RequestRetry:           3,
 		MaxRetryInterval:       30,

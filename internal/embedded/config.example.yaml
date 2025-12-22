@@ -11,8 +11,8 @@ tls:
 remote-management:
   allow-remote: false
 
-# Authentication directory (supports ~ for home directory)
-auth-dir: "~/.config/llm-mux/auth"
+# Authentication directory (supports $XDG_CONFIG_HOME and ~ for home directory)
+auth-dir: "$XDG_CONFIG_HOME/llm-mux/auth"
 
 # API keys for authentication (leave empty to use disable-auth: true)
 api-keys:

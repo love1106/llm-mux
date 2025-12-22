@@ -301,28 +301,57 @@ function Add-ToPath {
 function Initialize-Config {
     param([string]$BinaryPath)
 
-    $configDir = Join-Path $env:USERPROFILE ".config\llm-mux"
-    $configFile = Join-Path $configDir "config.yaml"
+    Write-Log "Initializing config and credentials..."
 
-    if (Test-Path $configFile) {
-        Write-Info "Config exists: $configFile"
-        return
-    }
-
-    Write-Log "Initializing configuration..."
-
+    # --init handles both config creation and management key generation
+    # It outputs the actual paths used (platform-specific)
+    # This avoids hardcoding paths that differ between Windows/Linux
     try {
-        $process = Start-Process -FilePath $BinaryPath -ArgumentList "--init" -NoNewWindow -Wait -PassThru
+        $pinfo = New-Object System.Diagnostics.ProcessStartInfo
+        $pinfo.FileName = $BinaryPath
+        $pinfo.Arguments = "--init"
+        $pinfo.RedirectStandardOutput = $true
+        $pinfo.RedirectStandardError = $true
+        $pinfo.UseShellExecute = $false
+        $pinfo.CreateNoWindow = $true
+
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $pinfo
+        $process.Start() | Out-Null
+        $stdout = $process.StandardOutput.ReadToEnd()
+        $process.WaitForExit()
+
         if ($process.ExitCode -eq 0) {
-            Write-Info "Config created: $configFile"
+            # Parse output from binary for actual paths
+            $lines = $stdout -split "`n"
+
+            foreach ($line in $lines) {
+                $trimmed = $line.Trim()
+                if ($trimmed -match "^Created:\s*(.+)$") {
+                    Write-Info "Config created: $($matches[1])"
+                }
+                elseif ($trimmed -match "^Management key:\s*(.+)$") {
+                    Write-Info "Management key: $($matches[1])"
+                }
+                elseif ($trimmed -match "^Generated management key:" -or $trimmed -match "^Regenerated management key:") {
+                    # Next non-empty line contains the key
+                    continue
+                }
+                elseif ($trimmed -match "^\s*([a-f0-9]{32})$") {
+                    Write-Info "Management key: $($matches[1])"
+                }
+                elseif ($trimmed -match "^Location:\s*(.+)$") {
+                    Write-Info "Credentials: $($matches[1])"
+                }
+            }
         }
         else {
-            Write-Warn "Config initialization returned non-zero exit code."
+            Write-Warn "Init returned non-zero exit code."
         }
     }
     catch {
-        Write-Warn "Failed to initialize config: $($_.Exception.Message)"
-        Write-Warn "You can create it manually later by running: $AppName --init"
+        Write-Warn "Failed to initialize: $($_.Exception.Message)"
+        Write-Warn "Run '$AppName --init' manually later."
     }
 }
 
@@ -446,13 +475,20 @@ function Show-Success {
 
     $status = if ($ServiceInstalled) { Get-ServiceStatus } else { "not installed" }
 
+    # Use XDG-compliant path (with fallback for Windows)
+    $configDir = if ($env:XDG_CONFIG_HOME) {
+        Join-Path $env:XDG_CONFIG_HOME "llm-mux"
+    } else {
+        Join-Path $env:USERPROFILE ".config\llm-mux"
+    }
+
     Write-Host ""
     Write-Host "========================================================" -ForegroundColor Green
     Write-Host " $AppName $TagName installed successfully!" -ForegroundColor Green
     Write-Host "========================================================" -ForegroundColor Green
     Write-Host ""
     Write-Host "  Binary:  $InstallDir\$AppName.exe"
-    Write-Host "  Config:  $env:USERPROFILE\.config\llm-mux\config.yaml"
+    Write-Host "  Config:  $configDir\config.yaml"
     if (-not $script:NoService) {
         Write-Host "  Service: $status"
     }

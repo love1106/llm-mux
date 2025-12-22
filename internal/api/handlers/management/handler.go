@@ -97,7 +97,7 @@ func (h *Handler) SetLogDirectory(dir string) {
 // Middleware enforces access control for management endpoints.
 // All requests (local and remote) require a valid management key.
 // Additionally, remote access requires allow-remote-management=true.
-// Key priority: MANAGEMENT_PASSWORD env > ~/.config/llm-mux/credentials.json
+// Key priority: MANAGEMENT_PASSWORD env > $XDG_CONFIG_HOME/llm-mux/credentials.json
 func (h *Handler) Middleware() gin.HandlerFunc {
 	const maxFailures = 5
 	const banDuration = 30 * time.Minute
@@ -118,7 +118,7 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 			allowRemote = true
 		}
 
-		// Get management key (fixed path: ~/.config/llm-mux/credentials.json)
+		// Get management key (XDG-compliant: $XDG_CONFIG_HOME/llm-mux/credentials.json)
 		managementKey := config.GetManagementKey()
 
 		fail := func() {}

@@ -28,6 +28,10 @@ SKIP_SERVICE=false
 SKIP_VERIFY=false
 FORCE_INSTALL=false
 
+# Paths detected from binary (set by init_config)
+DETECTED_CONFIG_PATH=""
+DETECTED_CRED_PATH=""
+
 # --- Utilities -----------------------------------------------
 
 RED='\033[0;31m'
@@ -284,23 +288,40 @@ install_binary() {
 # --- Config --------------------------------------------------
 
 init_config() {
-    local config_dir="$HOME/.config/llm-mux"
-    local config_file="$config_dir/config.yaml"
+    log "Initializing config and credentials..."
 
-    if [[ -f "$config_file" ]]; then
-        info "Config exists: $config_file"
-        return
-    fi
+    # --init handles both config creation and management key generation
+    # It outputs the actual paths used (platform-specific)
+    # This avoids hardcoding paths that differ between Windows/Linux/macOS
+    local init_output
+    if init_output=$("$INSTALL_DIR/$BINARY_NAME" --init 2>&1); then
+        # Display key info parsed from binary output
+        local mgmt_key
 
-    log "Creating default config..."
+        # Extract management key (format: "Management key: xxx" or "  xxx")
+        if echo "$init_output" | grep -q "Management key:"; then
+            mgmt_key=$(echo "$init_output" | grep "Management key:" | sed 's/.*Management key:[[:space:]]*//')
+        elif echo "$init_output" | grep -q "Generated management key:\|Regenerated management key:"; then
+            mgmt_key=$(echo "$init_output" | grep -A1 "management key:" | tail -1 | sed 's/^[[:space:]]*//')
+        fi
 
-    # Ensure config directory exists
-    mkdir -p "$config_dir"
+        # Extract paths from binary output (format: "Created: /path" or "Location: /path")
+        if echo "$init_output" | grep -q "^Created:"; then
+            DETECTED_CONFIG_PATH=$(echo "$init_output" | grep "^Created:" | sed 's/Created:[[:space:]]*//')
+            info "Config created: $DETECTED_CONFIG_PATH"
+        fi
 
-    if ! "$INSTALL_DIR/$BINARY_NAME" --init 2>/dev/null; then
-        warn "Failed to initialize config. You can create it manually later."
+        DETECTED_CRED_PATH=$(echo "$init_output" | grep "^Location:" | tail -1 | sed 's/Location:[[:space:]]*//')
+
+        # Derive config path from credentials path if not explicitly created
+        if [[ -z "$DETECTED_CONFIG_PATH" && -n "$DETECTED_CRED_PATH" ]]; then
+            DETECTED_CONFIG_PATH="$(dirname "$DETECTED_CRED_PATH")/config.yaml"
+        fi
+
+        [[ -n "$mgmt_key" ]] && info "Management key: $mgmt_key"
+        [[ -n "$DETECTED_CRED_PATH" ]] && info "Credentials: $DETECTED_CRED_PATH"
     else
-        info "Config created: $config_file"
+        warn "Failed to initialize. Run '$BINARY_NAME --init' manually later."
     fi
 }
 
@@ -515,13 +536,17 @@ print_success() {
         esac
     fi
 
+    # Use detected path or fallback to XDG-compliant path
+    local config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/llm-mux"
+    local config_display="${DETECTED_CONFIG_PATH:-$config_dir/config.yaml}"
+
     echo ""
     echo -e "${GREEN}======================================================${NC}"
     echo -e "${GREEN} llm-mux ${VERSION} installed successfully!${NC}"
     echo -e "${GREEN}======================================================${NC}"
     echo ""
     echo "  Binary:  $INSTALL_DIR/$BINARY_NAME"
-    echo "  Config:  ~/.config/llm-mux/config.yaml"
+    echo "  Config:  $config_display"
     [[ "$SKIP_SERVICE" != "true" ]] && echo "  Service: $status"
     echo ""
     echo "Next steps:"
