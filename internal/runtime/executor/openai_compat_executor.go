@@ -97,7 +97,7 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	if err != nil {
 		return resp, err
 	}
-	reporter.publish(ctx, parseOpenAIUsage(body))
+	reporter.publish(ctx, extractUsageFromOpenAIResponse(body))
 	// Ensure we at least record the request even if upstream doesn't return usage
 	reporter.ensurePublished(ctx)
 
@@ -187,14 +187,11 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			}
 
 			line := scanner.Bytes()
-			if detail, ok := parseOpenAIStreamUsage(line); ok {
-				reporter.publish(ctx, detail)
-			}
 			if len(line) == 0 {
 				continue
 			}
-			// Translate OpenAI stream chunks to target format
-			translatedChunks, errTranslate := TranslateOpenAIResponseStream(e.cfg, from, bytes.Clone(line), req.Model, messageID, streamState)
+			// Translate OpenAI stream chunks to target format and extract usage
+			result, errTranslate := TranslateOpenAIResponseStreamWithUsage(e.cfg, from, bytes.Clone(line), req.Model, messageID, streamState)
 			if errTranslate != nil {
 				select {
 				case out <- cliproxyexecutor.StreamChunk{Err: errTranslate}:
@@ -202,8 +199,11 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 				}
 				return
 			}
-			if translatedChunks != nil {
-				for _, chunk := range translatedChunks {
+			if result.Usage != nil {
+				reporter.publish(ctx, result.Usage)
+			}
+			if len(result.Chunks) > 0 {
+				for _, chunk := range result.Chunks {
 					select {
 					case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
 					case <-ctx.Done():

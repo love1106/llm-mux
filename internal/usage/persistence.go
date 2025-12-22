@@ -16,40 +16,44 @@ import (
 
 // UsageRecord represents a single usage record for persistence.
 type UsageRecord struct {
-	Provider        string
-	Model           string
-	APIKey          string
-	AuthID          string
-	AuthIndex       uint64
-	Source          string
-	RequestedAt     time.Time
-	Failed          bool
-	InputTokens     int64
-	OutputTokens    int64
-	ReasoningTokens int64
-	CachedTokens    int64
-	TotalTokens     int64
+	Provider                 string
+	Model                    string
+	APIKey                   string
+	AuthID                   string
+	AuthIndex                uint64
+	Source                   string
+	RequestedAt              time.Time
+	Failed                   bool
+	InputTokens              int64
+	OutputTokens             int64
+	ReasoningTokens          int64
+	CachedTokens             int64
+	TotalTokens              int64
+	AudioTokens              int64
+	CacheCreationInputTokens int64
+	CacheReadInputTokens     int64
+	ToolUsePromptTokens      int64
 }
 
 // Persister handles SQLite persistence for usage records with async batched writes.
 type Persister struct {
-	db               *sql.DB
-	recordChan       chan UsageRecord
-	flushTicker      *time.Ticker
-	wg               sync.WaitGroup
-	stopOnce         sync.Once
-	stopChan         chan struct{}
-	batchSize        int
-	flushInterval    time.Duration
-	retentionDays    int
-	cleanupTicker    *time.Ticker
-	dbPath           string
+	db            *sql.DB
+	recordChan    chan UsageRecord
+	flushTicker   *time.Ticker
+	wg            sync.WaitGroup
+	stopOnce      sync.Once
+	stopChan      chan struct{}
+	batchSize     int
+	flushInterval time.Duration
+	retentionDays int
+	cleanupTicker *time.Ticker
+	dbPath        string
 }
 
 const (
-	defaultBatchSize        = 100
-	defaultFlushInterval    = 5 * time.Second
-	defaultRetentionDays    = 30
+	defaultBatchSize         = 100
+	defaultFlushInterval     = 5 * time.Second
+	defaultRetentionDays     = 30
 	defaultChannelBufferSize = 1000
 )
 
@@ -140,6 +144,10 @@ func initSchema(db *sql.DB) error {
 		reasoning_tokens INTEGER NOT NULL DEFAULT 0,
 		cached_tokens INTEGER NOT NULL DEFAULT 0,
 		total_tokens INTEGER NOT NULL DEFAULT 0,
+		audio_tokens INTEGER NOT NULL DEFAULT 0,
+		cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+		cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
+		tool_use_prompt_tokens INTEGER NOT NULL DEFAULT 0,
 		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
 
@@ -228,8 +236,9 @@ func (p *Persister) writeBatch(records []UsageRecord) error {
 		INSERT INTO usage_records (
 			provider, model, api_key, auth_id, auth_index, source,
 			requested_at, failed, input_tokens, output_tokens,
-			reasoning_tokens, cached_tokens, total_tokens
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			reasoning_tokens, cached_tokens, total_tokens,
+			audio_tokens, cache_creation_input_tokens, cache_read_input_tokens, tool_use_prompt_tokens
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		_ = tx.Rollback()
@@ -252,6 +261,10 @@ func (p *Persister) writeBatch(records []UsageRecord) error {
 			record.ReasoningTokens,
 			record.CachedTokens,
 			record.TotalTokens,
+			record.AudioTokens,
+			record.CacheCreationInputTokens,
+			record.CacheReadInputTokens,
+			record.ToolUsePromptTokens,
 		)
 		if err != nil {
 			_ = tx.Rollback()

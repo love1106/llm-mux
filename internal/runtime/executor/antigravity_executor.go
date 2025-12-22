@@ -19,7 +19,6 @@ import (
 	"github.com/nghyane/llm-mux/internal/registry"
 	"github.com/nghyane/llm-mux/internal/util"
 
-	// "github.com/nghyane/llm-mux/internal/translator/ir"
 	cliproxyauth "github.com/nghyane/llm-mux/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/nghyane/llm-mux/sdk/cliproxy/executor"
 	log "github.com/sirupsen/logrus"
@@ -150,7 +149,7 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 			return resp, err
 		}
 
-		reporter.publish(ctx, parseAntigravityUsage(bodyBytes))
+		reporter.publish(ctx, extractUsageFromGeminiResponse(bodyBytes))
 
 		// Translate response using canonical translator
 		// Note: For Claude Thinking models on Antigravity, thinking content is ONLY returned
@@ -325,13 +324,9 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 					continue
 				}
 
-				if detail, ok := parseAntigravityStreamUsage(payload); ok {
-					reporter.publish(ctx, detail)
-				}
-
-				// Translate stream chunk using canonical translator
+				// Translate stream chunk using canonical translator and extract usage
 				// Pass JSON payload (not raw SSE line) for proper parsing
-				translatedChunks, errTranslateChunk := TranslateGeminiCLIResponseStream(e.cfg, from, payload, req.Model, messageID, streamState)
+				result, errTranslateChunk := TranslateGeminiCLIResponseStreamWithUsage(e.cfg, from, payload, req.Model, messageID, streamState)
 				if errTranslateChunk != nil {
 					select {
 					case out <- cliproxyexecutor.StreamChunk{Err: fmt.Errorf("failed to translate chunk: %w", errTranslateChunk)}:
@@ -340,7 +335,10 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 					}
 					continue
 				}
-				for _, chunk := range translatedChunks {
+				if result.Usage != nil {
+					reporter.publish(ctx, result.Usage)
+				}
+				for _, chunk := range result.Chunks {
 					select {
 					case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
 					case <-ctx.Done():
@@ -893,7 +891,6 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 		template = strJSON
 
 	} else {
-		// template, _ = sjson.Delete(template, "request.generationConfig.maxOutputTokens")
 	}
 
 	return []byte(template)

@@ -104,8 +104,8 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 		return resp, err
 	}
 
-	detail := parseOpenAIUsage(data)
-	if detail.TotalTokens > 0 {
+	detail := extractUsageFromOpenAIResponse(data)
+	if detail != nil && detail.TotalTokens > 0 {
 		reporter.publish(ctx, detail)
 	}
 
@@ -189,13 +189,10 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 				if bytes.Equal(data, []byte("[DONE]")) {
 					continue
 				}
-				if detail, ok := parseOpenAIStreamUsage(line); ok {
-					reporter.publish(ctx, detail)
-				}
 			}
 
-			// Translate stream chunk from OpenAI format
-			translatedChunks, errTranslate := TranslateOpenAIResponseStream(e.cfg, from, bytes.Clone(line), req.Model, messageID, streamState)
+			// Translate stream chunk from OpenAI format and extract usage
+			result, errTranslate := TranslateOpenAIResponseStreamWithUsage(e.cfg, from, bytes.Clone(line), req.Model, messageID, streamState)
 			if errTranslate != nil {
 				select {
 				case out <- cliproxyexecutor.StreamChunk{Err: errTranslate}:
@@ -203,7 +200,10 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 				}
 				return
 			}
-			for _, chunk := range translatedChunks {
+			if result.Usage != nil {
+				reporter.publish(ctx, result.Usage)
+			}
+			for _, chunk := range result.Chunks {
 				select {
 				case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
 				case <-ctx.Done():

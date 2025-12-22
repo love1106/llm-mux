@@ -138,7 +138,7 @@ func (e *GeminiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	if err != nil {
 		return resp, err
 	}
-	reporter.publish(ctx, parseGeminiUsage(data))
+	reporter.publish(ctx, extractUsageFromGeminiResponse(data))
 
 	translatedResp, err := TranslateGeminiResponseNonStream(e.cfg, from, data, req.Model)
 	if err != nil {
@@ -248,12 +248,9 @@ func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 			if len(payload) == 0 {
 				continue
 			}
-			if detail, ok := parseGeminiStreamUsage(payload); ok {
-				reporter.publish(ctx, detail)
-			}
 
 			messageID := "chatcmpl-" + req.Model
-			translatedChunks, err := TranslateGeminiResponseStream(e.cfg, from, bytes.Clone(payload), req.Model, messageID, streamState)
+			result, err := TranslateGeminiResponseStreamWithUsage(e.cfg, from, bytes.Clone(payload), req.Model, messageID, streamState)
 			if err != nil {
 				select {
 				case out <- cliproxyexecutor.StreamChunk{Err: err}:
@@ -261,7 +258,10 @@ func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 				}
 				return
 			}
-			for _, chunk := range translatedChunks {
+			if result.Usage != nil {
+				reporter.publish(ctx, result.Usage)
+			}
+			for _, chunk := range result.Chunks {
 				select {
 				case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
 				case <-ctx.Done():

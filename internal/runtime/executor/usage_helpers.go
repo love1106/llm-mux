@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nghyane/llm-mux/internal/translator/ir"
+	"github.com/nghyane/llm-mux/internal/translator/to_ir"
 	cliproxyauth "github.com/nghyane/llm-mux/sdk/cliproxy/auth"
 	"github.com/nghyane/llm-mux/sdk/cliproxy/usage"
 	"github.com/tidwall/gjson"
@@ -42,12 +44,13 @@ func newUsageReporter(ctx context.Context, provider, model string, auth *cliprox
 	return reporter
 }
 
-func (r *usageReporter) publish(ctx context.Context, detail usage.Detail) {
-	r.publishWithOutcome(ctx, detail, false)
+// publish publishes usage from IR Usage struct (optimized path - no duplicate parsing).
+func (r *usageReporter) publish(ctx context.Context, u *ir.Usage) {
+	r.publishWithOutcome(ctx, u, false)
 }
 
 func (r *usageReporter) publishFailure(ctx context.Context) {
-	r.publishWithOutcome(ctx, usage.Detail{}, true)
+	r.publishWithOutcome(ctx, nil, true)
 }
 
 func (r *usageReporter) trackFailure(ctx context.Context, errPtr *error) {
@@ -84,17 +87,15 @@ func isUserError(err error) bool {
 	return false
 }
 
-func (r *usageReporter) publishWithOutcome(ctx context.Context, detail usage.Detail, failed bool) {
+func (r *usageReporter) publishWithOutcome(ctx context.Context, u *ir.Usage, failed bool) {
 	if r == nil {
 		return
 	}
-	if detail.TotalTokens == 0 {
-		total := detail.InputTokens + detail.OutputTokens + detail.ReasoningTokens
-		if total > 0 {
-			detail.TotalTokens = total
-		}
+	// Skip empty usage records unless it's a failure
+	if u == nil && !failed {
+		return
 	}
-	if detail.InputTokens == 0 && detail.OutputTokens == 0 && detail.ReasoningTokens == 0 && detail.CachedTokens == 0 && detail.TotalTokens == 0 && !failed {
+	if u != nil && u.TotalTokens == 0 && u.PromptTokens == 0 && u.CompletionTokens == 0 && !failed {
 		return
 	}
 	r.once.Do(func() {
@@ -107,7 +108,7 @@ func (r *usageReporter) publishWithOutcome(ctx context.Context, detail usage.Det
 			AuthIndex:   r.authIndex,
 			RequestedAt: r.requestedAt,
 			Failed:      failed,
-			Detail:      detail,
+			Usage:       u,
 		})
 	})
 }
@@ -130,7 +131,7 @@ func (r *usageReporter) ensurePublished(ctx context.Context) {
 			AuthIndex:   r.authIndex,
 			RequestedAt: r.requestedAt,
 			Failed:      false,
-			Detail:      usage.Detail{},
+			Usage:       nil,
 		})
 	})
 }
@@ -200,245 +201,42 @@ func resolveUsageSource(auth *cliproxyauth.Auth, ctxAPIKey string) string {
 	return ""
 }
 
-func parseCodexUsage(data []byte) (usage.Detail, bool) {
-	usageNode := gjson.ParseBytes(data).Get("response.usage")
-	if !usageNode.Exists() {
-		return usage.Detail{}, false
+// =============================================================================
+// Usage Parsing Functions - Return *ir.Usage for unified tracking
+// =============================================================================
+
+// parseGeminiUsageMetadata is a shared helper for Gemini/Antigravity usage parsing.
+// =============================================================================
+// Optimized Usage Extraction from Translated Responses
+// These functions extract usage directly from translator IR parsing
+// instead of duplicating JSON parsing from raw responses.
+// =============================================================================
+
+// extractUsageFromClaudeResponse extracts usage from Claude response using IR parser.
+func extractUsageFromClaudeResponse(data []byte) *ir.Usage {
+	_, usage, err := to_ir.ParseClaudeResponse(data)
+	if err != nil {
+		return nil
 	}
-	detail := usage.Detail{
-		InputTokens:  usageNode.Get("input_tokens").Int(),
-		OutputTokens: usageNode.Get("output_tokens").Int(),
-		TotalTokens:  usageNode.Get("total_tokens").Int(),
-	}
-	if cached := usageNode.Get("input_tokens_details.cached_tokens"); cached.Exists() {
-		detail.CachedTokens = cached.Int()
-	}
-	if reasoning := usageNode.Get("output_tokens_details.reasoning_tokens"); reasoning.Exists() {
-		detail.ReasoningTokens = reasoning.Int()
-	}
-	return detail, true
+	return usage
 }
 
-func parseOpenAIUsage(data []byte) usage.Detail {
-	usageNode := gjson.ParseBytes(data).Get("usage")
-	if !usageNode.Exists() {
-		return usage.Detail{}
+// extractUsageFromOpenAIResponse extracts usage from OpenAI response using IR parser.
+func extractUsageFromOpenAIResponse(data []byte) *ir.Usage {
+	_, usage, err := to_ir.ParseOpenAIResponse(data)
+	if err != nil {
+		return nil
 	}
-	detail := usage.Detail{
-		InputTokens:  usageNode.Get("prompt_tokens").Int(),
-		OutputTokens: usageNode.Get("completion_tokens").Int(),
-		TotalTokens:  usageNode.Get("total_tokens").Int(),
-	}
-	if cached := usageNode.Get("prompt_tokens_details.cached_tokens"); cached.Exists() {
-		detail.CachedTokens = cached.Int()
-	}
-	if reasoning := usageNode.Get("completion_tokens_details.reasoning_tokens"); reasoning.Exists() {
-		detail.ReasoningTokens = reasoning.Int()
-	}
-	return detail
+	return usage
 }
 
-func parseOpenAIStreamUsage(line []byte) (usage.Detail, bool) {
-	payload := jsonPayload(line)
-	if len(payload) == 0 || !gjson.ValidBytes(payload) {
-		return usage.Detail{}, false
+// extractUsageFromGeminiResponse extracts usage from Gemini response using IR parser.
+func extractUsageFromGeminiResponse(data []byte) *ir.Usage {
+	_, _, usage, err := to_ir.ParseGeminiResponse(data)
+	if err != nil {
+		return nil
 	}
-	usageNode := gjson.GetBytes(payload, "usage")
-	if !usageNode.Exists() {
-		return usage.Detail{}, false
-	}
-	detail := usage.Detail{
-		InputTokens:  usageNode.Get("prompt_tokens").Int(),
-		OutputTokens: usageNode.Get("completion_tokens").Int(),
-		TotalTokens:  usageNode.Get("total_tokens").Int(),
-	}
-	if cached := usageNode.Get("prompt_tokens_details.cached_tokens"); cached.Exists() {
-		detail.CachedTokens = cached.Int()
-	}
-	if reasoning := usageNode.Get("completion_tokens_details.reasoning_tokens"); reasoning.Exists() {
-		detail.ReasoningTokens = reasoning.Int()
-	}
-	return detail, true
-}
-
-func parseClaudeUsage(data []byte) usage.Detail {
-	usageNode := gjson.ParseBytes(data).Get("usage")
-	if !usageNode.Exists() {
-		return usage.Detail{}
-	}
-	detail := usage.Detail{
-		InputTokens:  usageNode.Get("input_tokens").Int(),
-		OutputTokens: usageNode.Get("output_tokens").Int(),
-		CachedTokens: usageNode.Get("cache_read_input_tokens").Int(),
-	}
-	if detail.CachedTokens == 0 {
-		// fall back to creation tokens when read tokens are absent
-		detail.CachedTokens = usageNode.Get("cache_creation_input_tokens").Int()
-	}
-	detail.TotalTokens = detail.InputTokens + detail.OutputTokens
-	return detail
-}
-
-func parseClaudeStreamUsage(line []byte) (usage.Detail, bool) {
-	payload := jsonPayload(line)
-	if len(payload) == 0 || !gjson.ValidBytes(payload) {
-		return usage.Detail{}, false
-	}
-	usageNode := gjson.GetBytes(payload, "usage")
-	if !usageNode.Exists() {
-		return usage.Detail{}, false
-	}
-	detail := usage.Detail{
-		InputTokens:  usageNode.Get("input_tokens").Int(),
-		OutputTokens: usageNode.Get("output_tokens").Int(),
-		CachedTokens: usageNode.Get("cache_read_input_tokens").Int(),
-	}
-	if detail.CachedTokens == 0 {
-		detail.CachedTokens = usageNode.Get("cache_creation_input_tokens").Int()
-	}
-	detail.TotalTokens = detail.InputTokens + detail.OutputTokens
-	return detail, true
-}
-
-func parseGeminiCLIUsage(data []byte) usage.Detail {
-	usageNode := gjson.ParseBytes(data)
-	node := usageNode.Get("response.usageMetadata")
-	if !node.Exists() {
-		node = usageNode.Get("response.usage_metadata")
-	}
-	if !node.Exists() {
-		return usage.Detail{}
-	}
-	detail := usage.Detail{
-		InputTokens:     node.Get("promptTokenCount").Int(),
-		OutputTokens:    node.Get("candidatesTokenCount").Int(),
-		ReasoningTokens: node.Get("thoughtsTokenCount").Int(),
-		TotalTokens:     node.Get("totalTokenCount").Int(),
-	}
-	if detail.TotalTokens == 0 {
-		detail.TotalTokens = detail.InputTokens + detail.OutputTokens + detail.ReasoningTokens
-	}
-	return detail
-}
-
-func parseGeminiUsage(data []byte) usage.Detail {
-	usageNode := gjson.ParseBytes(data)
-	node := usageNode.Get("usageMetadata")
-	if !node.Exists() {
-		node = usageNode.Get("usage_metadata")
-	}
-	if !node.Exists() {
-		return usage.Detail{}
-	}
-	detail := usage.Detail{
-		InputTokens:     node.Get("promptTokenCount").Int(),
-		OutputTokens:    node.Get("candidatesTokenCount").Int(),
-		ReasoningTokens: node.Get("thoughtsTokenCount").Int(),
-		TotalTokens:     node.Get("totalTokenCount").Int(),
-	}
-	if detail.TotalTokens == 0 {
-		detail.TotalTokens = detail.InputTokens + detail.OutputTokens + detail.ReasoningTokens
-	}
-	return detail
-}
-
-func parseGeminiStreamUsage(line []byte) (usage.Detail, bool) {
-	payload := jsonPayload(line)
-	if len(payload) == 0 || !gjson.ValidBytes(payload) {
-		return usage.Detail{}, false
-	}
-	node := gjson.GetBytes(payload, "usageMetadata")
-	if !node.Exists() {
-		node = gjson.GetBytes(payload, "usage_metadata")
-	}
-	if !node.Exists() {
-		return usage.Detail{}, false
-	}
-	detail := usage.Detail{
-		InputTokens:     node.Get("promptTokenCount").Int(),
-		OutputTokens:    node.Get("candidatesTokenCount").Int(),
-		ReasoningTokens: node.Get("thoughtsTokenCount").Int(),
-		TotalTokens:     node.Get("totalTokenCount").Int(),
-	}
-	if detail.TotalTokens == 0 {
-		detail.TotalTokens = detail.InputTokens + detail.OutputTokens + detail.ReasoningTokens
-	}
-	return detail, true
-}
-
-func parseGeminiCLIStreamUsage(line []byte) (usage.Detail, bool) {
-	payload := jsonPayload(line)
-	if len(payload) == 0 || !gjson.ValidBytes(payload) {
-		return usage.Detail{}, false
-	}
-	node := gjson.GetBytes(payload, "response.usageMetadata")
-	if !node.Exists() {
-		node = gjson.GetBytes(payload, "usage_metadata")
-	}
-	if !node.Exists() {
-		return usage.Detail{}, false
-	}
-	detail := usage.Detail{
-		InputTokens:     node.Get("promptTokenCount").Int(),
-		OutputTokens:    node.Get("candidatesTokenCount").Int(),
-		ReasoningTokens: node.Get("thoughtsTokenCount").Int(),
-		TotalTokens:     node.Get("totalTokenCount").Int(),
-	}
-	if detail.TotalTokens == 0 {
-		detail.TotalTokens = detail.InputTokens + detail.OutputTokens + detail.ReasoningTokens
-	}
-	return detail, true
-}
-
-func parseAntigravityUsage(data []byte) usage.Detail {
-	usageNode := gjson.ParseBytes(data)
-	node := usageNode.Get("response.usageMetadata")
-	if !node.Exists() {
-		node = usageNode.Get("usageMetadata")
-	}
-	if !node.Exists() {
-		node = usageNode.Get("usage_metadata")
-	}
-	if !node.Exists() {
-		return usage.Detail{}
-	}
-	detail := usage.Detail{
-		InputTokens:     node.Get("promptTokenCount").Int(),
-		OutputTokens:    node.Get("candidatesTokenCount").Int(),
-		ReasoningTokens: node.Get("thoughtsTokenCount").Int(),
-		TotalTokens:     node.Get("totalTokenCount").Int(),
-	}
-	if detail.TotalTokens == 0 {
-		detail.TotalTokens = detail.InputTokens + detail.OutputTokens + detail.ReasoningTokens
-	}
-	return detail
-}
-
-func parseAntigravityStreamUsage(line []byte) (usage.Detail, bool) {
-	payload := jsonPayload(line)
-	if len(payload) == 0 || !gjson.ValidBytes(payload) {
-		return usage.Detail{}, false
-	}
-	node := gjson.GetBytes(payload, "response.usageMetadata")
-	if !node.Exists() {
-		node = gjson.GetBytes(payload, "usageMetadata")
-	}
-	if !node.Exists() {
-		node = gjson.GetBytes(payload, "usage_metadata")
-	}
-	if !node.Exists() {
-		return usage.Detail{}, false
-	}
-	detail := usage.Detail{
-		InputTokens:     node.Get("promptTokenCount").Int(),
-		OutputTokens:    node.Get("candidatesTokenCount").Int(),
-		ReasoningTokens: node.Get("thoughtsTokenCount").Int(),
-		TotalTokens:     node.Get("totalTokenCount").Int(),
-	}
-	if detail.TotalTokens == 0 {
-		detail.TotalTokens = detail.InputTokens + detail.OutputTokens + detail.ReasoningTokens
-	}
-	return detail, true
+	return usage
 }
 
 var stopChunkWithoutUsage sync.Map

@@ -81,7 +81,7 @@ func (e *QwenExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 	if err != nil {
 		return resp, err
 	}
-	reporter.publish(ctx, parseOpenAIUsage(data))
+	reporter.publish(ctx, extractUsageFromOpenAIResponse(data))
 
 	translatedResp, err := TranslateOpenAIResponseNonStream(e.cfg, from, data, req.Model)
 	if err != nil {
@@ -163,10 +163,7 @@ func (e *QwenExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 			}
 
 			line := scanner.Bytes()
-			if detail, ok := parseOpenAIStreamUsage(line); ok {
-				reporter.publish(ctx, detail)
-			}
-			chunks, err := TranslateOpenAIResponseStream(e.cfg, from, bytes.Clone(line), req.Model, messageID, streamState)
+			result, err := TranslateOpenAIResponseStreamWithUsage(e.cfg, from, bytes.Clone(line), req.Model, messageID, streamState)
 			if err != nil {
 				reporter.publishFailure(ctx)
 				select {
@@ -175,7 +172,10 @@ func (e *QwenExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 				}
 				return
 			}
-			for _, chunk := range chunks {
+			if result.Usage != nil {
+				reporter.publish(ctx, result.Usage)
+			}
+			for _, chunk := range result.Chunks {
 				select {
 				case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
 				case <-ctx.Done():
@@ -184,8 +184,8 @@ func (e *QwenExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 			}
 		}
 		// Handle [DONE] signal
-		doneChunks, _ := TranslateOpenAIResponseStream(e.cfg, from, []byte("[DONE]"), req.Model, messageID, streamState)
-		for _, chunk := range doneChunks {
+		doneResult, _ := TranslateOpenAIResponseStreamWithUsage(e.cfg, from, []byte("[DONE]"), req.Model, messageID, streamState)
+		for _, chunk := range doneResult.Chunks {
 			select {
 			case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
 			case <-ctx.Done():

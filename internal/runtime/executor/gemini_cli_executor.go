@@ -130,7 +130,7 @@ func (e *GeminiCLIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 			return resp, err
 		}
 		if httpResp.StatusCode >= 200 && httpResp.StatusCode < 300 {
-			reporter.publish(ctx, parseGeminiCLIUsage(data))
+			reporter.publish(ctx, extractUsageFromGeminiResponse(data))
 
 			translatedResp, err := TranslateGeminiCLIResponseNonStream(e.cfg, from, data, attemptModel)
 			if err != nil {
@@ -317,12 +317,8 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 						continue
 					}
 
-					if detail, ok := parseGeminiCLIStreamUsage(payload); ok {
-						reporter.publish(ctx, detail)
-					}
-
 					messageID := "chatcmpl-" + attempt
-					translatedChunks, err := TranslateGeminiCLIResponseStream(e.cfg, from, payload, attempt, messageID, streamState)
+					result, err := TranslateGeminiCLIResponseStreamWithUsage(e.cfg, from, payload, attempt, messageID, streamState)
 					if err != nil {
 						select {
 						case out <- cliproxyexecutor.StreamChunk{Err: err}:
@@ -330,7 +326,10 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 						}
 						return
 					}
-					for _, chunk := range translatedChunks {
+					if result.Usage != nil {
+						reporter.publish(ctx, result.Usage)
+					}
+					for _, chunk := range result.Chunks {
 						select {
 						case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
 						case <-ctx.Done():
@@ -357,7 +356,7 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 				}
 				return
 			}
-			reporter.publish(ctx, parseGeminiCLIUsage(data))
+			reporter.publish(ctx, extractUsageFromGeminiResponse(data))
 
 			// For non-streaming responses, convert to non-stream and return as single chunk
 			translatedResp, err := TranslateGeminiCLIResponseNonStream(e.cfg, from, data, attempt)

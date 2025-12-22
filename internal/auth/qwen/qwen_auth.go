@@ -131,7 +131,6 @@ func (qa *QwenAuth) RefreshTokens(ctx context.Context, refreshToken string) (*Qw
 
 	resp, err := qa.httpClient.Do(req)
 
-	// resp, err := qa.httpClient.PostForm(QwenOAuthTokenEndpoint, data)
 	if err != nil {
 		return nil, fmt.Errorf("token refresh request failed: %w", err)
 	}
@@ -190,7 +189,6 @@ func (qa *QwenAuth) InitiateDeviceFlow(ctx context.Context) (*DeviceFlow, error)
 
 	resp, err := qa.httpClient.Do(req)
 
-	// resp, err := qa.httpClient.PostForm(QwenOAuthDeviceCodeEndpoint, data)
 	if err != nil {
 		return nil, fmt.Errorf("device authorization request failed: %w", err)
 	}

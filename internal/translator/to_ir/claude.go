@@ -303,29 +303,16 @@ func parseClaudeMessage(m gjson.Result) ir.Message {
 				}
 			case "tool_use":
 				toolID := block.Get("id").String()
-
-				// Decode smuggled thought signature from ID
-				// Format: realID__SIG__signature
-				var thoughtSig []byte
-				if idx := strings.Index(toolID, "__SIG__"); idx != -1 {
-					sigStr := toolID[idx+len("__SIG__"):]
-					toolID = toolID[:idx]
-					thoughtSig = []byte(sigStr)
-				}
 				inputRaw := block.Get("input").Raw
 				if inputRaw == "" {
 					inputRaw = "{}"
 				}
 				msg.ToolCalls = append(msg.ToolCalls, ir.ToolCall{
-					ID: toolID, Name: block.Get("name").String(), Args: inputRaw, ThoughtSignature: thoughtSig,
+					ID: toolID, Name: block.Get("name").String(), Args: inputRaw,
 				})
 			case "tool_result":
 				resultContent := block.Get("content")
 				toolResultID := block.Get("tool_use_id").String()
-				// Strip signature from ID if present (Client sends back exact ID it received)
-				if idx := strings.Index(toolResultID, "__SIG__"); idx != -1 {
-					toolResultID = toolResultID[:idx]
-				}
 
 				toolResult := &ir.ToolResultPart{
 					ToolCallID: toolResultID,

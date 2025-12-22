@@ -52,6 +52,17 @@ func NewStreamState() *StreamState {
 // Returns true if the event should be skipped (not converted).
 type EventPreprocessor func(event *ir.UnifiedEvent, state *StreamState) (skip bool)
 
+// extractUsageFromEvents extracts usage from IR events (typically from Finish event).
+// Returns nil if no usage is found in events.
+func extractUsageFromEvents(events []ir.UnifiedEvent) *ir.Usage {
+	for i := range events {
+		if events[i].Type == ir.EventTypeFinish && events[i].Usage != nil {
+			return events[i].Usage
+		}
+	}
+	return nil
+}
+
 // convertEventsToOpenAI converts IR events to OpenAI format chunks.
 // This consolidates the repeated openai/cline case logic.
 func convertEventsToOpenAI(events []ir.UnifiedEvent, model, messageID string, state *StreamState, preprocessor EventPreprocessor) ([][]byte, error) {
@@ -264,6 +275,13 @@ type TranslationResult struct {
 	Payload              []byte                 // Translated payload
 	EstimatedInputTokens int64                  // Pre-calculated input token count (0 if not applicable)
 	IR                   *ir.UnifiedChatRequest // Parsed IR (for advanced use cases)
+}
+
+// StreamTranslationResult contains translated chunks and extracted usage from streaming response.
+// This eliminates duplicate parsing by extracting usage during translation.
+type StreamTranslationResult struct {
+	Chunks [][]byte  // Translated SSE chunks
+	Usage  *ir.Usage // Usage extracted from IR events (nil if not present in this chunk)
 }
 
 // =============================================================================
@@ -643,6 +661,60 @@ func TranslateCodexResponseStream(cfg *config.Config, to sdktranslator.Format, c
 	return chunks, err
 }
 
+// TranslateCodexResponseStreamWithUsage converts Codex streaming chunk and extracts usage.
+// This eliminates duplicate parsing by returning both translated chunks and usage in one operation.
+func TranslateCodexResponseStreamWithUsage(cfg *config.Config, to sdktranslator.Format, codexChunk []byte, model string, messageID string, state *CodexStreamState) (*StreamTranslationResult, error) {
+	// Early passthrough for codex format
+	toStr := to.String()
+	if toStr == "codex" || toStr == "openai-response" {
+		return &StreamTranslationResult{Chunks: [][]byte{codexChunk}}, nil
+	}
+
+	// Step 1: Parse Codex chunk to IR events
+	events, err := to_ir.ParseOpenAIChunk(codexChunk)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(events) == 0 {
+		return &StreamTranslationResult{}, nil
+	}
+
+	// Extract usage from events before conversion
+	usage := extractUsageFromEvents(events)
+
+	// Step 2: Initialize unified state from legacy state
+	if state == nil {
+		state = &CodexStreamState{}
+	}
+	ss := &StreamState{
+		ClaudeState:   state.ClaudeState,
+		ToolCallIndex: state.ToolCallIndex,
+	}
+	if ss.ClaudeState == nil {
+		ss.ClaudeState = from_ir.NewClaudeStreamState()
+	}
+
+	// Step 3: Convert using unified helpers
+	var chunks [][]byte
+	switch toStr {
+	case "openai", "cline":
+		chunks, err = convertEventsToOpenAI(events, model, messageID, ss, nil)
+	case "claude":
+		chunks, err = convertEventsToClaude(events, model, messageID, ss, nil)
+	case "ollama":
+		chunks, err = convertEventsToOllama(events, model, nil, ss)
+	default:
+		return &StreamTranslationResult{}, nil
+	}
+
+	// Sync state back
+	state.ToolCallIndex = ss.ToolCallIndex
+	state.ClaudeState = ss.ClaudeState
+
+	return &StreamTranslationResult{Chunks: chunks, Usage: usage}, err
+}
+
 // TranslateToClaude converts request to Claude API format.
 func TranslateToClaude(cfg *config.Config, from sdktranslator.Format, model string, payload []byte, streaming bool, metadata map[string]any) ([]byte, error) {
 	// Note: We always parse to IR even for "claude" format to enable thinking block injection
@@ -853,6 +925,76 @@ func TranslateGeminiCLIResponseStream(cfg *config.Config, to sdktranslator.Forma
 	return chunks, err
 }
 
+// TranslateGeminiCLIResponseStreamWithUsage converts Gemini CLI streaming chunk and extracts usage.
+// This eliminates duplicate parsing by returning both translated chunks and usage in one operation.
+func TranslateGeminiCLIResponseStreamWithUsage(cfg *config.Config, to sdktranslator.Format, geminiChunk []byte, model string, messageID string, state *GeminiCLIStreamState) (*StreamTranslationResult, error) {
+	// Early passthrough for gemini formats (no IR conversion needed)
+	toStr := to.String()
+	if toStr == "gemini" || toStr == "gemini-cli" {
+		if responseWrapper := gjson.GetBytes(geminiChunk, "response"); responseWrapper.Exists() {
+			return &StreamTranslationResult{Chunks: [][]byte{[]byte(responseWrapper.Raw)}}, nil
+		}
+		return &StreamTranslationResult{Chunks: [][]byte{geminiChunk}}, nil
+	}
+
+	// Step 1: Parse Gemini CLI chunk to IR events (with schema context if available)
+	var events []ir.UnifiedEvent
+	var err error
+	if state != nil && state.ToolSchemaCtx != nil {
+		events, err = (&from_ir.GeminiCLIProvider{}).ParseStreamChunkWithContext(geminiChunk, state.ToolSchemaCtx)
+	} else {
+		events, err = (&from_ir.GeminiCLIProvider{}).ParseStreamChunk(geminiChunk)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if len(events) == 0 {
+		return &StreamTranslationResult{}, nil
+	}
+
+	// Extract usage from events before conversion
+	usage := extractUsageFromEvents(events)
+
+	// Step 2: Initialize unified state from legacy state
+	if state == nil {
+		state = &GeminiCLIStreamState{}
+	}
+	ss := &StreamState{
+		ClaudeState:         state.ClaudeState,
+		ToolCallIndex:       state.ToolCallIndex,
+		ReasoningCharsAccum: state.ReasoningCharsAccum,
+		FinishSent:          state.FinishSent,
+		HasToolCalls:        state.HasToolCalls,
+		ToolSchemaCtx:       state.ToolSchemaCtx,
+	}
+	if ss.ClaudeState == nil {
+		ss.ClaudeState = from_ir.NewClaudeStreamState()
+	}
+
+	// Step 3: Convert using unified helpers with preprocessor
+	var chunks [][]byte
+	switch toStr {
+	case "openai", "cline":
+		chunks, err = convertEventsToOpenAI(events, model, messageID, ss, geminiPreprocessor)
+	case "claude":
+		chunks, err = convertEventsToClaude(events, model, messageID, ss, nil)
+	case "ollama":
+		chunks, err = convertEventsToOllama(events, model, nil, ss)
+	default:
+		return &StreamTranslationResult{}, nil
+	}
+
+	// Sync state back
+	state.ClaudeState = ss.ClaudeState
+	state.ToolCallIndex = ss.ToolCallIndex
+	state.ReasoningCharsAccum = ss.ReasoningCharsAccum
+	state.FinishSent = ss.FinishSent
+	state.HasToolCalls = ss.HasToolCalls
+
+	return &StreamTranslationResult{Chunks: chunks, Usage: usage}, err
+}
+
 // TranslateGeminiResponseNonStream converts Gemini (AI Studio) non-streaming response to target format.
 func TranslateGeminiResponseNonStream(cfg *config.Config, to sdktranslator.Format, geminiResponse []byte, model string) ([]byte, error) {
 	// Early passthrough for gemini format
@@ -1002,7 +1144,73 @@ func TranslateGeminiResponseStream(cfg *config.Config, to sdktranslator.Format, 
 	return chunks, err
 }
 
-// TranslateClaudeResponseNonStream converts Claude non-streaming response to target format.
+// TranslateGeminiResponseStreamWithUsage converts Gemini streaming chunk and extracts usage.
+// This eliminates duplicate parsing by returning both translated chunks and usage in one operation.
+func TranslateGeminiResponseStreamWithUsage(cfg *config.Config, to sdktranslator.Format, geminiChunk []byte, model string, messageID string, state *GeminiCLIStreamState) (*StreamTranslationResult, error) {
+	// Early passthrough for gemini format (no IR conversion needed)
+	toStr := to.String()
+	if toStr == "gemini" {
+		if responseWrapper := gjson.GetBytes(geminiChunk, "response"); responseWrapper.Exists() {
+			return &StreamTranslationResult{Chunks: [][]byte{[]byte(responseWrapper.Raw)}}, nil
+		}
+		return &StreamTranslationResult{Chunks: [][]byte{geminiChunk}}, nil
+	}
+
+	// Step 1: Parse Gemini chunk to IR events (with schema context if available)
+	var events []ir.UnifiedEvent
+	var err error
+	if state != nil && state.ToolSchemaCtx != nil {
+		events, err = to_ir.ParseGeminiChunkWithContext(geminiChunk, state.ToolSchemaCtx)
+	} else {
+		events, err = to_ir.ParseGeminiChunk(geminiChunk)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if len(events) == 0 {
+		return &StreamTranslationResult{}, nil
+	}
+
+	// Extract usage from events before conversion
+	usage := extractUsageFromEvents(events)
+
+	// Step 2: Initialize unified state from legacy state
+	if state == nil {
+		state = &GeminiCLIStreamState{}
+	}
+	ss := &StreamState{
+		ClaudeState:         state.ClaudeState,
+		ToolCallIndex:       state.ToolCallIndex,
+		ReasoningCharsAccum: state.ReasoningCharsAccum,
+		HasToolCalls:        state.HasToolCalls,
+		ToolSchemaCtx:       state.ToolSchemaCtx,
+	}
+	if ss.ClaudeState == nil {
+		ss.ClaudeState = from_ir.NewClaudeStreamState()
+	}
+
+	// Step 3: Convert using unified helpers with preprocessor
+	var chunks [][]byte
+	switch toStr {
+	case "openai", "cline":
+		chunks, err = convertEventsToOpenAI(events, model, messageID, ss, geminiPreprocessorNoFinishDedup)
+	case "claude":
+		chunks, err = convertEventsToClaude(events, model, messageID, ss, claudePreprocessor)
+	case "ollama":
+		chunks, err = convertEventsToOllama(events, model, nil, ss)
+	default:
+		return &StreamTranslationResult{}, nil
+	}
+
+	// Sync state back
+	state.ClaudeState = ss.ClaudeState
+	state.ToolCallIndex = ss.ToolCallIndex
+	state.ReasoningCharsAccum = ss.ReasoningCharsAccum
+	state.HasToolCalls = ss.HasToolCalls
+
+	return &StreamTranslationResult{Chunks: chunks, Usage: usage}, err
+}
 func TranslateClaudeResponseNonStream(cfg *config.Config, to sdktranslator.Format, claudeResponse []byte, model string) ([]byte, error) {
 	// Step 1: Parse Claude response to IR
 	messages, usage, err := to_ir.ParseClaudeResponse(claudeResponse)
@@ -1092,6 +1300,71 @@ func TranslateClaudeResponseStream(cfg *config.Config, to sdktranslator.Format, 
 	return chunks, err
 }
 
+// TranslateClaudeResponseStreamWithUsage converts Claude streaming chunk and extracts usage.
+// This eliminates duplicate parsing by returning both translated chunks and usage in one operation.
+func TranslateClaudeResponseStreamWithUsage(cfg *config.Config, to sdktranslator.Format, claudeChunk []byte, model string, messageID string, state *from_ir.ClaudeStreamState) (*StreamTranslationResult, error) {
+	toStr := to.String()
+
+	// Early passthrough for claude format
+	if toStr == "claude" {
+		return &StreamTranslationResult{Chunks: [][]byte{claudeChunk}}, nil
+	}
+
+	// Step 1: Parse Claude chunk to IR events
+	events, err := to_ir.ParseClaudeChunk(claudeChunk)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(events) == 0 {
+		return &StreamTranslationResult{}, nil
+	}
+
+	// Extract usage from events before conversion
+	usage := extractUsageFromEvents(events)
+
+	// Step 2: Convert using unified helpers
+	ss := &StreamState{}
+	if state != nil {
+		ss.HasToolCalls = state.HasToolCalls
+	}
+
+	claudeSourcePreprocessor := func(event *ir.UnifiedEvent, s *StreamState) bool {
+		if event.Type == ir.EventTypeToolCall {
+			s.HasToolCalls = true
+		}
+		return false
+	}
+
+	var chunks [][]byte
+	switch toStr {
+	case "openai", "cline":
+		chunks = make([][]byte, 0, len(events))
+		for _, event := range events {
+			claudeSourcePreprocessor(&event, ss)
+			idx := event.ToolCallIndex
+			chunk, err := from_ir.ToOpenAIChunk(event, model, messageID, idx)
+			if err != nil {
+				return nil, err
+			}
+			if chunk != nil {
+				chunks = append(chunks, chunk)
+			}
+		}
+	case "ollama":
+		chunks, err = convertEventsToOllama(events, model, nil, ss)
+	default:
+		return &StreamTranslationResult{}, nil
+	}
+
+	// Sync state back
+	if state != nil {
+		state.HasToolCalls = ss.HasToolCalls
+	}
+
+	return &StreamTranslationResult{Chunks: chunks, Usage: usage}, err
+}
+
 // OpenAIStreamState maintains state for OpenAI → OpenAI streaming conversions.
 type OpenAIStreamState struct {
 	ReasoningCharsAccum int // Track accumulated reasoning characters for token estimation
@@ -1157,6 +1430,66 @@ func TranslateOpenAIResponseStream(cfg *config.Config, to sdktranslator.Format, 
 	state.ReasoningCharsAccum = ss.ReasoningCharsAccum
 
 	return chunks, err
+}
+
+// TranslateOpenAIResponseStreamWithUsage converts OpenAI streaming chunk and extracts usage.
+// This eliminates duplicate parsing by returning both translated chunks and usage in one operation.
+func TranslateOpenAIResponseStreamWithUsage(cfg *config.Config, to sdktranslator.Format, openaiChunk []byte, model string, messageID string, state *OpenAIStreamState) (*StreamTranslationResult, error) {
+	// Step 1: Parse OpenAI chunk to IR events
+	events, err := to_ir.ParseOpenAIChunk(openaiChunk)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(events) == 0 {
+		return &StreamTranslationResult{}, nil
+	}
+
+	// Extract usage from events before conversion
+	usage := extractUsageFromEvents(events)
+
+	// Step 2: Initialize unified state from legacy state
+	if state == nil {
+		state = &OpenAIStreamState{}
+	}
+	ss := &StreamState{
+		ClaudeState:         from_ir.NewClaudeStreamState(),
+		ReasoningCharsAccum: state.ReasoningCharsAccum,
+	}
+
+	// Step 3: Convert using unified helpers
+	toStr := to.String()
+	var chunks [][]byte
+
+	switch toStr {
+	case "openai", "cline":
+		chunks = make([][]byte, 0, len(events))
+		for i := range events {
+			event := &events[i]
+			openaiPreprocessor(event, ss)
+			idx := event.ToolCallIndex
+			chunk, err := from_ir.ToOpenAIChunk(*event, model, messageID, idx)
+			if err != nil {
+				return nil, err
+			}
+			if chunk != nil {
+				chunks = append(chunks, chunk)
+			}
+		}
+	case "gemini", "gemini-cli":
+		chunks, err = convertEventsToGemini(events, model)
+	case "ollama":
+		chunks, err = convertEventsToOllama(events, model, nil, ss)
+	case "claude":
+		chunks, err = convertEventsToClaude(events, model, messageID, ss, nil)
+	default:
+		return &StreamTranslationResult{}, nil
+	}
+
+	// Sync state back
+	state.ReasoningCharsAccum = ss.ReasoningCharsAccum
+
+	return &StreamTranslationResult{Chunks: chunks, Usage: usage}, err
 }
 
 // TranslateOpenAIResponseNonStream converts OpenAI non-streaming response to target format.

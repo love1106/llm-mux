@@ -14,10 +14,11 @@ import (
 
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
-	claudeauth "github.com/nghyane/llm-mux/internal/auth/claude"
+	"github.com/nghyane/llm-mux/internal/auth/claude"
 	"github.com/nghyane/llm-mux/internal/config"
 	"github.com/nghyane/llm-mux/internal/misc"
 	"github.com/nghyane/llm-mux/internal/registry"
+	"github.com/nghyane/llm-mux/internal/translator/to_ir"
 	"github.com/nghyane/llm-mux/internal/util"
 	cliproxyauth "github.com/nghyane/llm-mux/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/nghyane/llm-mux/sdk/cliproxy/executor"
@@ -116,12 +117,15 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	if stream {
 		lines := bytes.Split(data, []byte("\n"))
 		for _, line := range lines {
-			if detail, ok := parseClaudeStreamUsage(line); ok {
-				reporter.publish(ctx, detail)
+			// Extract usage using IR parser instead of dedicated helper
+			if events, err := to_ir.ParseClaudeChunk(line); err == nil && len(events) > 0 {
+				if u := extractUsageFromEvents(events); u != nil {
+					reporter.publish(ctx, u)
+				}
 			}
 		}
 	} else {
-		reporter.publish(ctx, parseClaudeUsage(data))
+		reporter.publish(ctx, extractUsageFromClaudeResponse(data))
 	}
 
 	// Translate response using canonical translator
@@ -208,7 +212,6 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		if from.String() == "claude" {
 			scanner := bufio.NewScanner(decodedBody)
 			scanner.Buffer(make([]byte, 64*1024), DefaultStreamBufferSize)
-
 			for scanner.Scan() {
 				// Check context cancellation before processing each line
 				select {
@@ -218,8 +221,10 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 				}
 
 				line := scanner.Bytes()
-				if detail, ok := parseClaudeStreamUsage(line); ok {
-					reporter.publish(ctx, detail)
+				// Use translator to extract usage even in passthrough mode
+				result, _ := TranslateClaudeResponseStreamWithUsage(e.cfg, from, line, req.Model, "msg-dummy", nil)
+				if result != nil && result.Usage != nil {
+					reporter.publish(ctx, result.Usage)
 				}
 
 				// Forward the line as-is to preserve SSE format
@@ -257,13 +262,22 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 			}
 
 			line := scanner.Bytes()
-			if detail, ok := parseClaudeStreamUsage(line); ok {
-				reporter.publish(ctx, detail)
+			result, errTranslate := TranslateClaudeResponseStreamWithUsage(e.cfg, from, line, req.Model, messageID, nil)
+
+			if errTranslate != nil {
+				// Log but continue if possible, or fail
+				select {
+				case out <- cliproxyexecutor.StreamChunk{Err: errTranslate}:
+				case <-ctx.Done():
+				}
+				return
 			}
 
-			translatedChunks, errTranslate := TranslateClaudeResponseStream(e.cfg, from, line, req.Model, messageID, nil)
-			if errTranslate == nil && translatedChunks != nil {
-				for _, chunk := range translatedChunks {
+			if result != nil {
+				if result.Usage != nil {
+					reporter.publish(ctx, result.Usage)
+				}
+				for _, chunk := range result.Chunks {
 					select {
 					case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
 					case <-ctx.Done():
@@ -272,6 +286,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 				}
 			}
 		}
+
 		if errScan := scanner.Err(); errScan != nil {
 			reporter.publishFailure(ctx)
 			select {
@@ -364,7 +379,7 @@ func (e *ClaudeExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (
 	if refreshToken == "" {
 		return auth, nil
 	}
-	svc := claudeauth.NewClaudeAuth(e.cfg)
+	svc := claude.NewClaudeAuth(e.cfg)
 	td, err := svc.RefreshTokens(ctx, refreshToken)
 	if err != nil {
 		return nil, err

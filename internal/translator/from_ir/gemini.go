@@ -4,19 +4,15 @@ package from_ir
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
-	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
 	"github.com/nghyane/llm-mux/internal/translator/ir"
 	"github.com/nghyane/llm-mux/internal/translator/to_ir"
 	"github.com/nghyane/llm-mux/internal/util"
 )
-
-var debugToolCalls = os.Getenv("DEBUG_TOOL_CALLS") == "1"
 
 const (
 	// DefaultThinkingBudgetTokens is the default thinking budget for Gemini models (tokens)
@@ -429,8 +425,6 @@ func (p *GeminiProvider) buildAssistantAndToolParts(
 		return nil, nil
 	}
 
-	var lastThoughtSig []byte
-
 	for i := range msg.Content {
 		cp := &msg.Content[i]
 		switch cp.Type {
@@ -444,10 +438,6 @@ func (p *GeminiProvider) buildAssistantAndToolParts(
 			part := map[string]any{"text": cp.Reasoning, "thought": true}
 			if isValidThoughtSignature(cp.ThoughtSignature) {
 				part["thoughtSignature"] = string(cp.ThoughtSignature)
-				lastThoughtSig = cp.ThoughtSignature
-				if debugToolCalls {
-					log.Debugf("gemini: captured thinking signature (len=%d) for propagation", len(lastThoughtSig))
-				}
 			}
 			modelParts = append(modelParts, part)
 
@@ -489,10 +479,10 @@ func (p *GeminiProvider) buildAssistantAndToolParts(
 		}
 		part := map[string]any{"functionCall": fcMap}
 
-		if len(tc.ThoughtSignature) > 0 {
+		// Only use the tool call's own signature - do not propagate from other parts
+		// ThoughtSignature is opaque and context-specific, reusing it can cause corruption
+		if isValidThoughtSignature(tc.ThoughtSignature) {
 			part["thoughtSignature"] = string(tc.ThoughtSignature)
-		} else if len(lastThoughtSig) > 0 {
-			part["thoughtSignature"] = string(lastThoughtSig)
 		}
 		modelParts = append(modelParts, part)
 

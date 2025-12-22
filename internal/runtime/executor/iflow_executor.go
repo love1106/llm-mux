@@ -90,7 +90,7 @@ func (e *IFlowExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	if err != nil {
 		return resp, err
 	}
-	reporter.publish(ctx, parseOpenAIUsage(data))
+	reporter.publish(ctx, extractUsageFromOpenAIResponse(data))
 	// Ensure usage is recorded even if upstream omits usage metadata.
 	reporter.ensurePublished(ctx)
 
@@ -180,10 +180,7 @@ func (e *IFlowExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 			}
 
 			line := scanner.Bytes()
-			if detail, ok := parseOpenAIStreamUsage(line); ok {
-				reporter.publish(ctx, detail)
-			}
-			chunks, err := TranslateOpenAIResponseStream(e.cfg, from, bytes.Clone(line), req.Model, messageID, streamState)
+			result, err := TranslateOpenAIResponseStreamWithUsage(e.cfg, from, bytes.Clone(line), req.Model, messageID, streamState)
 			if err != nil {
 				reporter.publishFailure(ctx)
 				select {
@@ -192,7 +189,10 @@ func (e *IFlowExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 				}
 				return
 			}
-			for _, chunk := range chunks {
+			if result.Usage != nil {
+				reporter.publish(ctx, result.Usage)
+			}
+			for _, chunk := range result.Chunks {
 				select {
 				case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
 				case <-ctx.Done():

@@ -15,6 +15,7 @@ import (
 
 	vertexauth "github.com/nghyane/llm-mux/internal/auth/vertex"
 	"github.com/nghyane/llm-mux/internal/config"
+	"github.com/nghyane/llm-mux/internal/translator/from_ir"
 	"github.com/nghyane/llm-mux/internal/util"
 	cliproxyauth "github.com/nghyane/llm-mux/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/nghyane/llm-mux/sdk/cliproxy/executor"
@@ -286,7 +287,7 @@ func (e *GeminiVertexExecutor) executeWithServiceAccount(ctx context.Context, au
 	if errRead != nil {
 		return resp, errRead
 	}
-	reporter.publish(ctx, parseGeminiUsage(data))
+	reporter.publish(ctx, extractUsageFromGeminiResponse(data))
 
 	translatedResp, err := TranslateGeminiResponseNonStream(e.cfg, from, data, req.Model)
 	if err != nil {
@@ -360,7 +361,7 @@ func (e *GeminiVertexExecutor) executeWithAPIKey(ctx context.Context, auth *clip
 	if errRead != nil {
 		return resp, errRead
 	}
-	reporter.publish(ctx, parseGeminiUsage(data))
+	reporter.publish(ctx, extractUsageFromGeminiResponse(data))
 
 	translatedResp, err := TranslateGeminiResponseNonStream(e.cfg, from, data, req.Model)
 	if err != nil {
@@ -381,10 +382,11 @@ func (e *GeminiVertexExecutor) executeStreamWithServiceAccount(ctx context.Conte
 
 	from := opts.SourceFormat
 	// Thinking config is now handled by the translator (including auto-apply for Claude)
-	body, err := TranslateToGemini(e.cfg, from, req.Model, bytes.Clone(req.Payload), true, req.Metadata)
+	translation, err := TranslateToGeminiWithTokens(e.cfg, from, req.Model, bytes.Clone(req.Payload), true, req.Metadata)
 	if err != nil {
 		return nil, err
 	}
+	body := translation.Payload
 	body = util.StripThinkingConfigIfUnsupported(req.Model, body)
 
 	baseURL := vertexBaseURL(location)
@@ -426,6 +428,8 @@ func (e *GeminiVertexExecutor) executeStreamWithServiceAccount(ctx context.Conte
 	out := make(chan cliproxyexecutor.StreamChunk)
 	stream = out
 	messageID := "chatcmpl-" + req.Model
+	estimatedInputTokens := translation.EstimatedInputTokens
+
 	go func() {
 		defer close(out)
 		defer func() {
@@ -435,28 +439,33 @@ func (e *GeminiVertexExecutor) executeStreamWithServiceAccount(ctx context.Conte
 		}()
 		scanner := bufio.NewScanner(httpResp.Body)
 		scanner.Buffer(make([]byte, 64*1024), DefaultStreamBufferSize)
-		var streamState *GeminiCLIStreamState
+		streamState := &GeminiCLIStreamState{
+			ClaudeState: from_ir.NewClaudeStreamState(),
+		}
+		// Set pre-calculated input tokens for message_start
+		streamState.ClaudeState.EstimatedInputTokens = estimatedInputTokens
+
 		for scanner.Scan() {
 			line := scanner.Bytes()
-			if detail, ok := parseGeminiStreamUsage(line); ok {
-				reporter.publish(ctx, detail)
-			}
-			chunks, err := TranslateGeminiResponseStream(e.cfg, from, bytes.Clone(line), req.Model, messageID, streamState)
+			result, err := TranslateGeminiResponseStreamWithUsage(e.cfg, from, bytes.Clone(line), req.Model, messageID, streamState)
 			if err != nil {
 				out <- cliproxyexecutor.StreamChunk{Err: err}
 				return
 			}
-			for _, chunk := range chunks {
+			if result.Usage != nil {
+				reporter.publish(ctx, result.Usage)
+			}
+			for _, chunk := range result.Chunks {
 				out <- cliproxyexecutor.StreamChunk{Payload: chunk}
 			}
 		}
 		// Handle [DONE]
-		doneChunks, err := TranslateGeminiResponseStream(e.cfg, from, []byte("[DONE]"), req.Model, messageID, streamState)
+		doneResult, err := TranslateGeminiResponseStreamWithUsage(e.cfg, from, []byte("[DONE]"), req.Model, messageID, streamState)
 		if err != nil {
 			out <- cliproxyexecutor.StreamChunk{Err: err}
 			return
 		}
-		for _, chunk := range doneChunks {
+		for _, chunk := range doneResult.Chunks {
 			out <- cliproxyexecutor.StreamChunk{Payload: chunk}
 		}
 		if errScan := scanner.Err(); errScan != nil {
@@ -474,10 +483,11 @@ func (e *GeminiVertexExecutor) executeStreamWithAPIKey(ctx context.Context, auth
 
 	from := opts.SourceFormat
 	// Thinking config is now handled by the translator (including auto-apply for Claude)
-	body, err := TranslateToGemini(e.cfg, from, req.Model, bytes.Clone(req.Payload), true, req.Metadata)
+	translation, err := TranslateToGeminiWithTokens(e.cfg, from, req.Model, bytes.Clone(req.Payload), true, req.Metadata)
 	if err != nil {
 		return nil, err
 	}
+	body := translation.Payload
 	body = util.StripThinkingConfigIfUnsupported(req.Model, body)
 
 	// For API key auth, use simpler URL format without project/location
@@ -519,6 +529,8 @@ func (e *GeminiVertexExecutor) executeStreamWithAPIKey(ctx context.Context, auth
 	out := make(chan cliproxyexecutor.StreamChunk)
 	stream = out
 	messageID := "chatcmpl-" + req.Model
+	estimatedInputTokens := translation.EstimatedInputTokens
+
 	go func() {
 		defer close(out)
 		defer func() {
@@ -528,28 +540,33 @@ func (e *GeminiVertexExecutor) executeStreamWithAPIKey(ctx context.Context, auth
 		}()
 		scanner := bufio.NewScanner(httpResp.Body)
 		scanner.Buffer(make([]byte, 64*1024), DefaultStreamBufferSize)
-		var streamState *GeminiCLIStreamState
+		streamState := &GeminiCLIStreamState{
+			ClaudeState: from_ir.NewClaudeStreamState(),
+		}
+		// Set pre-calculated input tokens for message_start
+		streamState.ClaudeState.EstimatedInputTokens = estimatedInputTokens
+
 		for scanner.Scan() {
 			line := scanner.Bytes()
-			if detail, ok := parseGeminiStreamUsage(line); ok {
-				reporter.publish(ctx, detail)
-			}
-			chunks, err := TranslateGeminiResponseStream(e.cfg, from, bytes.Clone(line), req.Model, messageID, streamState)
+			result, err := TranslateGeminiResponseStreamWithUsage(e.cfg, from, bytes.Clone(line), req.Model, messageID, streamState)
 			if err != nil {
 				out <- cliproxyexecutor.StreamChunk{Err: err}
 				return
 			}
-			for _, chunk := range chunks {
+			if result.Usage != nil {
+				reporter.publish(ctx, result.Usage)
+			}
+			for _, chunk := range result.Chunks {
 				out <- cliproxyexecutor.StreamChunk{Payload: chunk}
 			}
 		}
 		// Handle [DONE]
-		doneChunks, err := TranslateGeminiResponseStream(e.cfg, from, []byte("[DONE]"), req.Model, messageID, streamState)
+		doneResult, err := TranslateGeminiResponseStreamWithUsage(e.cfg, from, []byte("[DONE]"), req.Model, messageID, streamState)
 		if err != nil {
 			out <- cliproxyexecutor.StreamChunk{Err: err}
 			return
 		}
-		for _, chunk := range doneChunks {
+		for _, chunk := range doneResult.Chunks {
 			out <- cliproxyexecutor.StreamChunk{Payload: chunk}
 		}
 		if errScan := scanner.Err(); errScan != nil {

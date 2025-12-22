@@ -380,7 +380,6 @@ func (p *ClaudeProvider) ParseStreamChunkWithState(chunkJSON []byte, state *ir.C
 	if len(data) == 0 {
 		return nil, nil
 	}
-	// fmt.Printf("DEBUG: SSE Chunk: %s\n", string(data))
 	if ir.ValidateJSON(data) != nil {
 		return nil, nil // Ignore invalid chunks in streaming
 	}

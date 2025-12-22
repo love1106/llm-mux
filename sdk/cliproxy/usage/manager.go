@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nghyane/llm-mux/internal/translator/ir"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -18,16 +19,7 @@ type Record struct {
 	Source      string
 	RequestedAt time.Time
 	Failed      bool
-	Detail      Detail
-}
-
-// Detail holds the token usage breakdown.
-type Detail struct {
-	InputTokens     int64
-	OutputTokens    int64
-	ReasoningTokens int64
-	CachedTokens    int64
-	TotalTokens     int64
+	Usage       *ir.Usage // Token usage from IR layer (comprehensive)
 }
 
 // Plugin consumes usage records emitted by the proxy runtime.

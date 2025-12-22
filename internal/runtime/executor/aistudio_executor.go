@@ -68,7 +68,7 @@ func (e *AIStudioExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth,
 	if wsResp.Status < 200 || wsResp.Status >= 300 {
 		return resp, statusErr{code: wsResp.Status, msg: string(wsResp.Body)}
 	}
-	reporter.publish(ctx, parseGeminiUsage(wsResp.Body))
+	reporter.publish(ctx, extractUsageFromGeminiResponse(wsResp.Body))
 
 	translatedResp, err := TranslateGeminiResponseNonStream(e.cfg, opts.SourceFormat, wsResp.Body, req.Model)
 	if err != nil {
@@ -161,16 +161,16 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 			case wsrelay.MessageTypeStreamChunk:
 				if len(event.Payload) > 0 {
 					filtered := FilterSSEUsageMetadata(event.Payload)
-					if detail, ok := parseGeminiStreamUsage(filtered); ok {
-						reporter.publish(ctx, detail)
-					}
 
-					translatedChunks, err := TranslateGeminiResponseStream(e.cfg, opts.SourceFormat, bytes.Clone(filtered), req.Model, messageID, streamState)
+					result, err := TranslateGeminiResponseStreamWithUsage(e.cfg, opts.SourceFormat, bytes.Clone(filtered), req.Model, messageID, streamState)
 					if err != nil {
 						out <- cliproxyexecutor.StreamChunk{Err: err}
 						return false
 					}
-					for _, chunk := range translatedChunks {
+					if result.Usage != nil {
+						reporter.publish(ctx, result.Usage)
+					}
+					for _, chunk := range result.Chunks {
 						out <- cliproxyexecutor.StreamChunk{Payload: ensureColonSpacedJSON(chunk)}
 					}
 					break
@@ -188,7 +188,7 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 				} else {
 					out <- cliproxyexecutor.StreamChunk{Payload: ensureColonSpacedJSON(event.Payload)}
 				}
-				reporter.publish(ctx, parseGeminiUsage(event.Payload))
+				reporter.publish(ctx, extractUsageFromGeminiResponse(event.Payload))
 				return false
 			case wsrelay.MessageTypeError:
 				reporter.publishFailure(ctx)

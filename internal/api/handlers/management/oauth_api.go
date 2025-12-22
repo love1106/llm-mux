@@ -68,9 +68,6 @@ type oauthCallbackData struct {
 	Error       string `json:"error"`
 }
 
-// tokenExchangeFunc is the signature for provider-specific token exchange functions.
-type tokenExchangeFunc func(ctx context.Context, callback *oauthCallbackData) (*coreauth.Auth, error)
-
 // OAuthStart handles POST /v0/management/oauth/start
 // Initiates an OAuth flow for the specified provider.
 // Supports: OAuth (claude, codex, gemini, antigravity, iflow), Device Flow (qwen, copilot)

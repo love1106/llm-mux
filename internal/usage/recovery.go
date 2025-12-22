@@ -24,7 +24,9 @@ func LoadRecordsFromDB(db *sql.DB, retentionDays int, stats *RequestStatistics) 
 		SELECT
 			provider, model, api_key, auth_id, auth_index, source,
 			requested_at, failed, input_tokens, output_tokens,
-			reasoning_tokens, cached_tokens, total_tokens
+			reasoning_tokens, cached_tokens, total_tokens,
+			COALESCE(audio_tokens, 0), COALESCE(cache_creation_input_tokens, 0),
+			COALESCE(cache_read_input_tokens, 0), COALESCE(tool_use_prompt_tokens, 0)
 		FROM usage_records
 		WHERE requested_at >= ?
 		ORDER BY requested_at ASC
@@ -51,6 +53,10 @@ func LoadRecordsFromDB(db *sql.DB, retentionDays int, stats *RequestStatistics) 
 			&record.ReasoningTokens,
 			&record.CachedTokens,
 			&record.TotalTokens,
+			&record.AudioTokens,
+			&record.CacheCreationInputTokens,
+			&record.CacheReadInputTokens,
+			&record.ToolUsePromptTokens,
 		)
 		if err != nil {
 			log.Printf("[WARN] Failed to scan usage record: %v", err)
@@ -82,16 +88,20 @@ func rebuildStatsFromRecord(stats *RequestStatistics, record UsageRecord) {
 	}
 
 	detail := TokenStats{
-		InputTokens:     record.InputTokens,
-		OutputTokens:    record.OutputTokens,
-		ReasoningTokens: record.ReasoningTokens,
-		CachedTokens:    record.CachedTokens,
-		TotalTokens:     record.TotalTokens,
+		PromptTokens:             record.InputTokens,
+		CompletionTokens:         record.OutputTokens,
+		ReasoningTokens:          record.ReasoningTokens,
+		CachedTokens:             record.CachedTokens,
+		TotalTokens:              record.TotalTokens,
+		AudioTokens:              record.AudioTokens,
+		CacheCreationInputTokens: record.CacheCreationInputTokens,
+		CacheReadInputTokens:     record.CacheReadInputTokens,
+		ToolUsePromptTokens:      record.ToolUsePromptTokens,
 	}
 
 	// Recalculate total if needed
 	if detail.TotalTokens == 0 {
-		detail.TotalTokens = detail.InputTokens + detail.OutputTokens + detail.ReasoningTokens
+		detail.TotalTokens = detail.PromptTokens + detail.CompletionTokens
 	}
 
 	statsKey := record.APIKey

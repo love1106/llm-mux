@@ -100,7 +100,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 			continue
 		}
 
-		if detail, ok := parseCodexUsage(line); ok {
+		if detail := extractUsageFromOpenAIResponse(line); detail != nil {
 			reporter.publish(ctx, detail)
 		}
 
@@ -189,7 +189,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 			if bytes.HasPrefix(line, dataTag) {
 				data := bytes.TrimSpace(line[5:])
 				if gjson.GetBytes(data, "type").String() == "response.completed" {
-					if detail, ok := parseCodexUsage(data); ok {
+					if detail := extractUsageFromOpenAIResponse(data); detail != nil {
 						reporter.publish(ctx, detail)
 					}
 				}

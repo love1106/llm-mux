@@ -102,7 +102,7 @@ func (e *ClineExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		return resp, err
 	}
 
-	reporter.publish(ctx, parseOpenAIUsage(data))
+	reporter.publish(ctx, extractUsageFromOpenAIResponse(data))
 
 	translatedResp, err := TranslateOpenAIResponseNonStream(e.cfg, from, data, req.Model)
 	if err != nil {
@@ -190,10 +190,6 @@ func (e *ClineExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 
 			line := scanner.Bytes()
 
-			if detail, ok := parseOpenAIStreamUsage(line); ok {
-				reporter.publish(ctx, detail)
-			}
-
 			payload := line
 			if bytes.HasPrefix(line, []byte("data: ")) {
 				payload = bytes.TrimSpace(line[6:])
@@ -213,9 +209,9 @@ func (e *ClineExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 
 			firstChunk = false
 
-			// Translate via IR (for reasoning_tokens tracking)
+			// Translate via IR (for reasoning_tokens tracking) and extract usage
 			lineWithPrefix := append([]byte("data: "), payload...)
-			translatedChunks, errTranslate := TranslateOpenAIResponseStream(e.cfg, from, lineWithPrefix, req.Model, messageID, streamState)
+			result, errTranslate := TranslateOpenAIResponseStreamWithUsage(e.cfg, from, lineWithPrefix, req.Model, messageID, streamState)
 			if errTranslate != nil {
 				reporter.publishFailure(ctx)
 				select {
@@ -224,8 +220,11 @@ func (e *ClineExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 				}
 				return
 			}
-			if translatedChunks != nil {
-				for _, chunk := range translatedChunks {
+			if result.Usage != nil {
+				reporter.publish(ctx, result.Usage)
+			}
+			if len(result.Chunks) > 0 {
+				for _, chunk := range result.Chunks {
 					select {
 					case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
 					case <-ctx.Done():

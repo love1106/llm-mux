@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nghyane/llm-mux/internal/translator/ir"
 	coreusage "github.com/nghyane/llm-mux/sdk/cliproxy/usage"
+	log "github.com/sirupsen/logrus"
 )
 
 var statisticsEnabled atomic.Bool
@@ -56,7 +58,7 @@ func (p *LoggerPlugin) HandleUsage(ctx context.Context, record coreusage.Record)
 		if timestamp.IsZero() {
 			timestamp = time.Now()
 		}
-		detail := normaliseDetail(record.Detail)
+		tokens := normaliseUsage(record.Usage)
 		statsKey := record.APIKey
 		if statsKey == "" {
 			statsKey = resolveAPIIdentifier(ctx, record)
@@ -71,19 +73,23 @@ func (p *LoggerPlugin) HandleUsage(ctx context.Context, record coreusage.Record)
 		}
 
 		p.persister.Enqueue(UsageRecord{
-			Provider:        record.Provider,
-			Model:           modelName,
-			APIKey:          statsKey,
-			AuthID:          "", // Can be extracted from context if needed
-			AuthIndex:       record.AuthIndex,
-			Source:          record.Source,
-			RequestedAt:     timestamp,
-			Failed:          failed,
-			InputTokens:     detail.InputTokens,
-			OutputTokens:    detail.OutputTokens,
-			ReasoningTokens: detail.ReasoningTokens,
-			CachedTokens:    detail.CachedTokens,
-			TotalTokens:     detail.TotalTokens,
+			Provider:                 record.Provider,
+			Model:                    modelName,
+			APIKey:                   statsKey,
+			AuthID:                   record.AuthID,
+			AuthIndex:                record.AuthIndex,
+			Source:                   record.Source,
+			RequestedAt:              timestamp,
+			Failed:                   failed,
+			InputTokens:              tokens.PromptTokens,
+			OutputTokens:             tokens.CompletionTokens,
+			ReasoningTokens:          tokens.ReasoningTokens,
+			CachedTokens:             tokens.CachedTokens,
+			TotalTokens:              tokens.TotalTokens,
+			AudioTokens:              tokens.AudioTokens,
+			CacheCreationInputTokens: tokens.CacheCreationInputTokens,
+			CacheReadInputTokens:     tokens.CacheReadInputTokens,
+			ToolUsePromptTokens:      tokens.ToolUsePromptTokens,
 		})
 	}
 }
@@ -111,7 +117,7 @@ func InitializePersistence(dbPath string, batchSize, flushIntervalSecs, retentio
 	if persister.db != nil {
 		if err := LoadRecordsFromDB(persister.db, retentionDays, defaultRequestStatistics); err != nil {
 			// Log warning but don't fail - we can continue with empty stats
-			fmt.Printf("[WARN] Failed to load historical usage records: %v\n", err)
+			log.Warnf("Failed to load historical usage records: %v", err)
 		}
 	}
 
@@ -181,11 +187,15 @@ type RequestDetail struct {
 
 // TokenStats captures the token usage breakdown for a request.
 type TokenStats struct {
-	InputTokens     int64 `json:"input_tokens"`
-	OutputTokens    int64 `json:"output_tokens"`
-	ReasoningTokens int64 `json:"reasoning_tokens"`
-	CachedTokens    int64 `json:"cached_tokens"`
-	TotalTokens     int64 `json:"total_tokens"`
+	PromptTokens             int64 `json:"prompt_tokens"`
+	CompletionTokens         int64 `json:"completion_tokens"`
+	ReasoningTokens          int64 `json:"reasoning_tokens"`
+	CachedTokens             int64 `json:"cached_tokens"`
+	TotalTokens              int64 `json:"total_tokens"`
+	AudioTokens              int64 `json:"audio_tokens,omitempty"`
+	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int64 `json:"cache_read_input_tokens,omitempty"`
+	ToolUsePromptTokens      int64 `json:"tool_use_prompt_tokens,omitempty"`
 }
 
 // StatisticsSnapshot represents an immutable view of the aggregated metrics.
@@ -249,8 +259,8 @@ func (s *RequestStatistics) Record(ctx context.Context, record coreusage.Record)
 	if timestamp.IsZero() {
 		timestamp = time.Now()
 	}
-	detail := normaliseDetail(record.Detail)
-	totalTokens := detail.TotalTokens
+	tokens := normaliseUsage(record.Usage)
+	totalTokens := tokens.TotalTokens
 	statsKey := record.APIKey
 	if statsKey == "" {
 		statsKey = resolveAPIIdentifier(ctx, record)
@@ -291,7 +301,7 @@ func (s *RequestStatistics) Record(ctx context.Context, record coreusage.Record)
 		Timestamp: timestamp,
 		Source:    record.Source,
 		AuthIndex: record.AuthIndex,
-		Tokens:    detail,
+		Tokens:    tokens,
 		Failed:    failed,
 	})
 
@@ -448,19 +458,28 @@ func resolveSuccess(ctx context.Context) bool {
 	return status < httpStatusBadRequest || status >= 500
 }
 
-func normaliseDetail(detail coreusage.Detail) TokenStats {
+func normaliseUsage(u *ir.Usage) TokenStats {
+	if u == nil {
+		return TokenStats{}
+	}
 	tokens := TokenStats{
-		InputTokens:     detail.InputTokens,
-		OutputTokens:    detail.OutputTokens,
-		ReasoningTokens: detail.ReasoningTokens,
-		CachedTokens:    detail.CachedTokens,
-		TotalTokens:     detail.TotalTokens,
+		PromptTokens:             u.PromptTokens,
+		CompletionTokens:         u.CompletionTokens,
+		ReasoningTokens:          int64(u.ThoughtsTokenCount),
+		CachedTokens:             u.CachedTokens,
+		TotalTokens:              u.TotalTokens,
+		AudioTokens:              u.AudioTokens,
+		CacheCreationInputTokens: u.CacheCreationInputTokens,
+		CacheReadInputTokens:     u.CacheReadInputTokens,
+		ToolUsePromptTokens:      u.ToolUsePromptTokens,
 	}
-	if tokens.TotalTokens == 0 {
-		tokens.TotalTokens = detail.InputTokens + detail.OutputTokens + detail.ReasoningTokens
+	// Fallback reasoning tokens from CompletionTokensDetails
+	if tokens.ReasoningTokens == 0 && u.CompletionTokensDetails != nil {
+		tokens.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
 	}
+	// Compute total if not provided
 	if tokens.TotalTokens == 0 {
-		tokens.TotalTokens = detail.InputTokens + detail.OutputTokens + detail.ReasoningTokens + detail.CachedTokens
+		tokens.TotalTokens = tokens.PromptTokens + tokens.CompletionTokens
 	}
 	return tokens
 }
