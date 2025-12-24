@@ -31,11 +31,7 @@ import (
 	sdkconfig "github.com/nghyane/llm-mux/sdk/config"
 )
 
-const (
-	kiroAPIURL         = "https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse"
-	kiroRefreshSkew    = 5 * time.Minute
-	kiroRequestTimeout = 120 * time.Second
-)
+const kiroAPIURL = KiroDefaultBaseURL
 
 var kiroModelMapping = map[string]string{
 	"claude-sonnet-4-5":                  "CLAUDE_SONNET_4_5_20250929_V1_0",
@@ -68,7 +64,7 @@ func (e *KiroExecutor) ensureValidToken(ctx context.Context, auth *coreauth.Auth
 	token := getMetaString(auth.Metadata, "access_token", "accessToken")
 	expiry := parseTokenExpiry(auth.Metadata)
 
-	if token != "" && expiry.After(time.Now().Add(kiroRefreshSkew)) {
+	if token != "" && expiry.After(time.Now().Add(KiroRefreshSkew)) {
 		return token, nil, nil
 	}
 
@@ -167,7 +163,7 @@ func (e *KiroExecutor) Execute(ctx context.Context, auth *coreauth.Auth, req cli
 		return cliproxyexecutor.Response{}, err
 	}
 
-	client := &http.Client{Timeout: kiroRequestTimeout}
+	client := &http.Client{Timeout: KiroRequestTimeout}
 	if proxy := e.cfg.ProxyURL; proxy != "" {
 		util.SetProxy(&sdkconfig.SDKConfig{ProxyURL: proxy}, client)
 	} else if auth.ProxyURL != "" {

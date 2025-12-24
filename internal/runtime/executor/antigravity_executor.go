@@ -1,7 +1,6 @@
 package executor
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -17,7 +16,9 @@ import (
 	"github.com/nghyane/llm-mux/internal/config"
 	"github.com/nghyane/llm-mux/internal/oauth"
 	"github.com/nghyane/llm-mux/internal/registry"
+	"github.com/nghyane/llm-mux/internal/translator/ir"
 	"github.com/nghyane/llm-mux/internal/util"
+	sdktranslator "github.com/nghyane/llm-mux/sdk/translator"
 
 	cliproxyauth "github.com/nghyane/llm-mux/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/nghyane/llm-mux/sdk/cliproxy/executor"
@@ -31,15 +32,47 @@ import (
 // The "antigravity" format is used for upstream communication with the google antigravity.
 
 const (
-	antigravityBaseURLDaily = "https://daily-cloudcode-pa.sandbox.googleapis.com"
-	antigravityBaseURLProd  = "https://cloudcode-pa.googleapis.com"
 	antigravityStreamPath   = "/v1internal:streamGenerateContent"
 	antigravityGeneratePath = "/v1internal:generateContent"
 	antigravityModelsPath   = "/v1internal:fetchAvailableModels"
-	defaultAntigravityAgent = "antigravity/1.11.5 windows/amd64"
 	antigravityAuthType     = "antigravity"
-	refreshSkew             = 3000 * time.Second
 )
+
+// =============================================================================
+// Model Alias Maps (refactored from switch statements)
+// =============================================================================
+
+// modelNameToAlias maps upstream model names to user-facing aliases.
+var modelNameToAlias = map[string]string{
+	"rev19-uic3-1p":              "gemini-2.5-computer-use-preview-10-2025",
+	"gemini-3-pro-image":         "gemini-3-pro-image-preview",
+	"gemini-3-pro-high":          "gemini-3-pro-preview",
+	"claude-sonnet-4-5":          "gemini-claude-sonnet-4-5",
+	"claude-sonnet-4-5-thinking": "gemini-claude-sonnet-4-5-thinking",
+	"claude-opus-4-5-thinking":   "gemini-claude-opus-4-5-thinking",
+}
+
+// modelAliasToName maps user-facing aliases to upstream model names.
+var modelAliasToName = map[string]string{
+	"gemini-2.5-computer-use-preview-10-2025": "rev19-uic3-1p",
+	"gemini-3-pro-image-preview":              "gemini-3-pro-image",
+	"gemini-3-pro-preview":                    "gemini-3-pro-high",
+	"gemini-claude-sonnet-4-5":                "claude-sonnet-4-5",
+	"claude-sonnet-4-5":                       "claude-sonnet-4-5",
+	"gemini-claude-sonnet-4-5-thinking":       "claude-sonnet-4-5-thinking",
+	"claude-sonnet-4-5-thinking":              "claude-sonnet-4-5-thinking",
+	"gemini-claude-opus-4-5-thinking":         "claude-opus-4-5-thinking",
+	"claude-opus-4-5-thinking":                "claude-opus-4-5-thinking",
+}
+
+// hiddenModels contains model names that should be excluded from model listings.
+var hiddenModels = map[string]bool{
+	"chat_20706":                true,
+	"chat_23310":                true,
+	"gemini-2.5-flash-thinking": true,
+	"gemini-3-pro-low":          true,
+	"gemini-2.5-pro":            true,
+}
 
 // Note: We use crypto/rand via uuid package for thread-safe random generation
 // instead of math/rand which requires mutex protection
@@ -60,6 +93,37 @@ func (e *AntigravityExecutor) Identifier() string { return antigravityAuthType }
 
 // PrepareRequest implements ProviderExecutor.
 func (e *AntigravityExecutor) PrepareRequest(_ *http.Request, _ *cliproxyauth.Auth) error { return nil }
+
+// =============================================================================
+// Antigravity Stream Processor (implements StreamProcessor interface)
+// =============================================================================
+
+// antigravityStreamProcessor processes Antigravity SSE stream lines.
+type antigravityStreamProcessor struct {
+	cfg       *config.Config
+	from      sdktranslator.Format
+	model     string
+	messageID string
+	state     *GeminiCLIStreamState
+}
+
+// ProcessLine implements StreamProcessor.ProcessLine for Antigravity streams.
+func (p *antigravityStreamProcessor) ProcessLine(payload []byte) ([][]byte, *ir.Usage, error) {
+	result, err := TranslateGeminiCLIResponseStreamWithUsage(p.cfg, p.from, payload, p.model, p.messageID, p.state)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to translate chunk: %w", err)
+	}
+	return result.Chunks, result.Usage, nil
+}
+
+// ProcessDone implements StreamProcessor.ProcessDone (no-op for Antigravity).
+func (p *antigravityStreamProcessor) ProcessDone() ([][]byte, error) {
+	return nil, nil
+}
+
+// =============================================================================
+// Execute Method (Non-Streaming) - Uses RetryHandler
+// =============================================================================
 
 // Execute handles non-streaming requests via the antigravity generate endpoint.
 func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {
@@ -84,31 +148,38 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 
 	baseURLs := antigravityBaseURLFallbackOrder(auth)
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	handler := NewRetryHandler(AntigravityRetryConfig())
 
 	var lastStatus int
 	var lastBody []byte
 	var lastErr error
-	retrier := &rateLimitRetrier{}
 
 	for idx := 0; idx < len(baseURLs); idx++ {
 		baseURL := baseURLs[idx]
+		hasNext := idx+1 < len(baseURLs)
+
 		httpReq, errReq := e.buildRequest(ctx, auth, token, req.Model, translated, false, opts.Alt, baseURL)
 		if errReq != nil {
-			err = errReq
-			return resp, err
+			return resp, errReq
 		}
 
 		httpResp, errDo := httpClient.Do(httpReq)
 		if errDo != nil {
-			lastStatus = 0
-			lastBody = nil
-			lastErr = errDo
-			if idx+1 < len(baseURLs) {
-				log.Debugf("antigravity executor: request error on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
-				continue
+			lastStatus, lastBody, lastErr = 0, nil, errDo
+			action, ctxErr := handler.HandleError(ctx, errDo, hasNext)
+			if ctxErr != nil {
+				return resp, ctxErr
 			}
-			err = errDo
-			return resp, err
+			switch action {
+			case RetryActionContinueNext:
+				log.Debugf("antigravity executor: request error on base url %s, retrying with fallback", baseURL)
+				continue
+			case RetryActionRetryCurrent:
+				idx--
+				continue
+			default:
+				return resp, errDo
+			}
 		}
 
 		bodyBytes, errRead := io.ReadAll(httpResp.Body)
@@ -116,69 +187,64 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 			log.Errorf("antigravity executor: close response body error: %v", errClose)
 		}
 		if errRead != nil {
-			err = errRead
-			return resp, err
+			return resp, errRead
 		}
 
-		if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
-			log.Debugf("antigravity executor: upstream error status: %d, body: %s", httpResp.StatusCode, summarizeErrorBody(httpResp.Header.Get("Content-Type"), bodyBytes))
-			lastStatus = httpResp.StatusCode
-			lastBody = append([]byte(nil), bodyBytes...)
-			lastErr = nil
-			if httpResp.StatusCode == http.StatusTooManyRequests {
-				hasNextBaseURL := idx+1 < len(baseURLs)
-				if hasNextBaseURL {
-					log.Debugf("antigravity executor: rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
-				}
-				action, ctxErr := retrier.handleRateLimit(ctx, hasNextBaseURL, bodyBytes)
-				if ctxErr != nil {
-					err = ctxErr
-					return resp, err
-				}
-				switch action {
-				case rateLimitActionContinue:
-					continue
-				case rateLimitActionRetry:
-					idx--
-					continue
-				}
-				// rateLimitActionMaxExceeded - fall through to error
+		// Handle response using RetryHandler
+		action, ctxErr := handler.HandleResponse(ctx, httpResp.StatusCode, bodyBytes, hasNext)
+		if ctxErr != nil {
+			return resp, ctxErr
+		}
+
+		switch action {
+		case RetryActionSuccess:
+			// Success path - translate and return
+			reporter.publish(ctx, extractUsageFromGeminiResponse(bodyBytes))
+			translatedResp, errTranslateResp := TranslateGeminiCLIResponseNonStream(e.cfg, from, bodyBytes, req.Model)
+			if errTranslateResp != nil {
+				return resp, fmt.Errorf("failed to translate response: %w", errTranslateResp)
 			}
+			if translatedResp != nil {
+				resp = cliproxyexecutor.Response{Payload: translatedResp}
+			} else {
+				resp = cliproxyexecutor.Response{Payload: bodyBytes}
+			}
+			reporter.ensurePublished(ctx)
+			return resp, nil
+
+		case RetryActionContinueNext:
+			log.Debugf("antigravity executor: status %d on %s, trying next base url", httpResp.StatusCode, baseURL)
+			lastStatus, lastBody, lastErr = httpResp.StatusCode, append([]byte(nil), bodyBytes...), nil
+			continue
+
+		case RetryActionRetryCurrent:
+			lastStatus, lastBody, lastErr = httpResp.StatusCode, append([]byte(nil), bodyBytes...), nil
+			idx--
+			continue
+
+		case RetryActionFail:
+			log.Debugf("antigravity executor: upstream error status: %d, body: %s", httpResp.StatusCode, summarizeErrorBody(httpResp.Header.Get("Content-Type"), bodyBytes))
 			retryAfter := ParseQuotaRetryDelay(bodyBytes)
-			err = newCategorizedError(httpResp.StatusCode, string(bodyBytes), retryAfter)
-			return resp, err
+			return resp, NewStatusError(httpResp.StatusCode, string(bodyBytes), retryAfter)
 		}
-
-		reporter.publish(ctx, extractUsageFromGeminiResponse(bodyBytes))
-
-		// Translate response using canonical translator
-		// Note: For Claude Thinking models on Antigravity, thinking content is ONLY returned
-		// in Streaming mode (SSE). Non-stream responses currently strip thinking content.
-		translatedResp, errTranslateResp := TranslateGeminiCLIResponseNonStream(e.cfg, from, bodyBytes, req.Model)
-		if errTranslateResp != nil {
-			return resp, fmt.Errorf("failed to translate response: %w", errTranslateResp)
-		}
-		if translatedResp != nil {
-			resp = cliproxyexecutor.Response{Payload: translatedResp}
-		} else {
-			// Translator returned nil - pass through raw response
-			resp = cliproxyexecutor.Response{Payload: bodyBytes}
-		}
-		reporter.ensurePublished(ctx)
-		return resp, nil
 	}
 
+	// All base URLs exhausted
 	switch {
 	case lastStatus != 0:
 		retryAfter := ParseQuotaRetryDelay(lastBody)
-		err = newCategorizedError(lastStatus, string(lastBody), retryAfter)
+		err = NewStatusError(lastStatus, string(lastBody), retryAfter)
 	case lastErr != nil:
 		err = lastErr
 	default:
-		err = newCategorizedError(http.StatusServiceUnavailable, "antigravity executor: no base url available", nil)
+		err = NewStatusError(http.StatusServiceUnavailable, "antigravity executor: no base url available", nil)
 	}
 	return resp, err
 }
+
+// =============================================================================
+// ExecuteStream Method - Uses RetryHandler and RunSSEStream
+// =============================================================================
 
 // ExecuteStream handles streaming requests via the antigravity upstream.
 func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (stream <-chan cliproxyexecutor.StreamChunk, err error) {
@@ -207,170 +273,112 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 
 	baseURLs := antigravityBaseURLFallbackOrder(auth)
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	handler := NewRetryHandler(AntigravityRetryConfig())
 
 	var lastStatus int
 	var lastBody []byte
 	var lastErr error
-	retrier := &rateLimitRetrier{}
 
 	for idx := 0; idx < len(baseURLs); idx++ {
 		baseURL := baseURLs[idx]
+		hasNext := idx+1 < len(baseURLs)
+
 		httpReq, errReq := e.buildRequest(ctx, auth, token, req.Model, translated, true, opts.Alt, baseURL)
 		if errReq != nil {
-			err = errReq
-			return nil, err
+			return nil, errReq
 		}
 
 		httpResp, errDo := httpClient.Do(httpReq)
 		if errDo != nil {
-			lastStatus = 0
-			lastBody = nil
-			lastErr = errDo
-			if idx+1 < len(baseURLs) {
-				log.Debugf("antigravity executor: request error on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
-				continue
+			lastStatus, lastBody, lastErr = 0, nil, errDo
+			action, ctxErr := handler.HandleError(ctx, errDo, hasNext)
+			if ctxErr != nil {
+				return nil, ctxErr
 			}
-			err = errDo
-			return nil, err
+			switch action {
+			case RetryActionContinueNext:
+				log.Debugf("antigravity executor: request error on base url %s, retrying with fallback", baseURL)
+				continue
+			case RetryActionRetryCurrent:
+				idx--
+				continue
+			default:
+				return nil, errDo
+			}
 		}
+
+		// Handle non-2xx responses
 		if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
 			bodyBytes, errRead := io.ReadAll(httpResp.Body)
 			if errClose := httpResp.Body.Close(); errClose != nil {
 				log.Errorf("antigravity executor: close response body error: %v", errClose)
 			}
 			if errRead != nil {
-				lastStatus = 0
-				lastBody = nil
-				lastErr = errRead
-				if idx+1 < len(baseURLs) {
-					log.Debugf("antigravity executor: read error on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+				lastStatus, lastBody, lastErr = 0, nil, errRead
+				if hasNext {
+					log.Debugf("antigravity executor: read error on base url %s, retrying with fallback", baseURL)
 					continue
 				}
-				err = errRead
-				return nil, err
+				return nil, errRead
 			}
-			lastStatus = httpResp.StatusCode
-			lastBody = append([]byte(nil), bodyBytes...)
-			lastErr = nil
-			if httpResp.StatusCode == http.StatusTooManyRequests {
-				hasNextBaseURL := idx+1 < len(baseURLs)
-				if hasNextBaseURL {
-					log.Debugf("antigravity executor: rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
-				}
-				action, ctxErr := retrier.handleRateLimit(ctx, hasNextBaseURL, bodyBytes)
-				if ctxErr != nil {
-					err = ctxErr
-					return nil, err
-				}
-				switch action {
-				case rateLimitActionContinue:
-					continue
-				case rateLimitActionRetry:
-					idx--
-					continue
-				}
-				// rateLimitActionMaxExceeded - fall through to error
-			} else if (httpResp.StatusCode == http.StatusNotFound || httpResp.StatusCode >= 500) && idx+1 < len(baseURLs) {
-				log.Debugf("antigravity executor: error %d on base url %s, retrying with fallback base url: %s", httpResp.StatusCode, baseURL, baseURLs[idx+1])
+
+			action, ctxErr := handler.HandleResponse(ctx, httpResp.StatusCode, bodyBytes, hasNext)
+			if ctxErr != nil {
+				return nil, ctxErr
+			}
+
+			switch action {
+			case RetryActionContinueNext:
+				log.Debugf("antigravity executor: status %d on %s, trying next base url", httpResp.StatusCode, baseURL)
+				lastStatus, lastBody, lastErr = httpResp.StatusCode, append([]byte(nil), bodyBytes...), nil
 				continue
+			case RetryActionRetryCurrent:
+				lastStatus, lastBody, lastErr = httpResp.StatusCode, append([]byte(nil), bodyBytes...), nil
+				idx--
+				continue
+			case RetryActionFail:
+				retryAfter := ParseQuotaRetryDelay(bodyBytes)
+				return nil, NewStatusError(httpResp.StatusCode, string(bodyBytes), retryAfter)
 			}
-			retryAfter := ParseQuotaRetryDelay(bodyBytes)
-			err = newCategorizedError(httpResp.StatusCode, string(bodyBytes), retryAfter)
-			return nil, err
 		}
 
-		out := make(chan cliproxyexecutor.StreamChunk)
-		stream = out
+		// Success - create stream processor and run SSE stream
+		streamState := NewAntigravityStreamState(opts.OriginalRequest)
+		streamState.ClaudeState.EstimatedInputTokens = estimatedInputTokens
+		messageID := "chatcmpl-" + req.Model
 
-		go func(resp *http.Response, inputTokens int64) {
-			defer close(out)
-			defer func() {
-				if errClose := resp.Body.Close(); errClose != nil {
-					log.Errorf("antigravity executor: close response body error: %v", errClose)
-				}
-			}()
-			scanner := bufio.NewScanner(resp.Body)
-			scanner.Buffer(make([]byte, 64*1024), DefaultStreamBufferSize)
+		processor := &antigravityStreamProcessor{
+			cfg:       e.cfg,
+			from:      from,
+			model:     req.Model,
+			messageID: messageID,
+			state:     streamState,
+		}
 
-			// Initialize streaming state with schema context from original request for tool call normalization
-			streamState := NewAntigravityStreamState(opts.OriginalRequest)
-			// Set pre-calculated input tokens for message_start
-			streamState.ClaudeState.EstimatedInputTokens = inputTokens
-			messageID := "chatcmpl-" + req.Model
-
-			for scanner.Scan() {
-				// Check context cancellation before processing each line
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-
-				line := scanner.Bytes()
-
-				// Filter usage metadata for all models
-				// Only retain usage statistics in the terminal chunk
-				filteredLine := FilterSSEUsageMetadata(line)
-
-				// Extract JSON payload from SSE line (strips "data: " prefix)
-				payload := jsonPayload(filteredLine)
-				if payload == nil {
-					continue // Skip non-JSON lines (empty, comments, etc.)
-				}
-
-				// Validate JSON to handle malformed SSE data gracefully
-				if !gjson.ValidBytes(payload) {
-					log.Debugf("antigravity executor: skipping malformed SSE payload")
-					continue
-				}
-
-				// Translate stream chunk using canonical translator and extract usage
-				// Pass JSON payload (not raw SSE line) for proper parsing
-				result, errTranslateChunk := TranslateGeminiCLIResponseStreamWithUsage(e.cfg, from, payload, req.Model, messageID, streamState)
-				if errTranslateChunk != nil {
-					select {
-					case out <- cliproxyexecutor.StreamChunk{Err: fmt.Errorf("failed to translate chunk: %w", errTranslateChunk)}:
-					case <-ctx.Done():
-						return
-					}
-					continue
-				}
-				if result.Usage != nil {
-					reporter.publish(ctx, result.Usage)
-				}
-				for _, chunk := range result.Chunks {
-					select {
-					case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}
-
-			if errScan := scanner.Err(); errScan != nil {
-				reporter.publishFailure(ctx)
-				select {
-				case out <- cliproxyexecutor.StreamChunk{Err: errScan}:
-				case <-ctx.Done():
-				}
-			} else {
-				reporter.ensurePublished(ctx)
-			}
-		}(httpResp, estimatedInputTokens)
+		stream = RunSSEStream(ctx, httpResp.Body, reporter, processor, StreamConfig{
+			ExecutorName:    "antigravity",
+			Preprocessor:    GeminiPreprocessor(),
+			EnsurePublished: true,
+		})
 		return stream, nil
 	}
 
+	// All base URLs exhausted
 	switch {
 	case lastStatus != 0:
 		retryAfter := ParseQuotaRetryDelay(lastBody)
-		err = newCategorizedError(lastStatus, string(lastBody), retryAfter)
+		err = NewStatusError(lastStatus, string(lastBody), retryAfter)
 	case lastErr != nil:
 		err = lastErr
 	default:
-		err = newCategorizedError(http.StatusServiceUnavailable, "antigravity executor: no base url available", nil)
+		err = NewStatusError(http.StatusServiceUnavailable, "antigravity executor: no base url available", nil)
 	}
 	return nil, err
 }
+
+// =============================================================================
+// Other Methods
+// =============================================================================
 
 // Refresh refreshes the OAuth token using the refresh token.
 func (e *AntigravityExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
@@ -386,7 +394,7 @@ func (e *AntigravityExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Au
 
 // CountTokens is not supported for the antigravity provider.
 func (e *AntigravityExecutor) CountTokens(context.Context, *cliproxyauth.Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
-	return cliproxyexecutor.Response{}, newCategorizedError(http.StatusNotImplemented, "count tokens not supported", nil)
+	return cliproxyexecutor.Response{}, NewStatusError(http.StatusNotImplemented, "count tokens not supported", nil)
 }
 
 // FetchAntigravityModels retrieves available models using the supplied auth.
@@ -402,8 +410,12 @@ func FetchAntigravityModels(ctx context.Context, auth *cliproxyauth.Auth, cfg *c
 
 	baseURLs := antigravityBaseURLFallbackOrder(auth)
 	httpClient := newProxyAwareHTTPClient(ctx, cfg, auth, 0)
+	handler := NewRetryHandler(AntigravityRetryConfig())
 
-	for idx, baseURL := range baseURLs {
+	for idx := 0; idx < len(baseURLs); idx++ {
+		baseURL := baseURLs[idx]
+		hasNext := idx+1 < len(baseURLs)
+
 		modelsURL := baseURL + antigravityModelsPath
 		httpReq, errReq := http.NewRequestWithContext(ctx, http.MethodPost, modelsURL, bytes.NewReader([]byte(`{}`)))
 		if errReq != nil {
@@ -418,8 +430,9 @@ func FetchAntigravityModels(ctx context.Context, auth *cliproxyauth.Auth, cfg *c
 
 		httpResp, errDo := httpClient.Do(httpReq)
 		if errDo != nil {
-			if idx+1 < len(baseURLs) {
-				log.Debugf("antigravity executor: models request error on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+			action, _ := handler.HandleError(ctx, errDo, hasNext)
+			if action == RetryActionContinueNext {
+				log.Debugf("antigravity executor: models request error on base url %s, retrying with fallback", baseURL)
 				continue
 			}
 			return nil
@@ -430,17 +443,19 @@ func FetchAntigravityModels(ctx context.Context, auth *cliproxyauth.Auth, cfg *c
 			log.Errorf("antigravity executor: close response body error: %v", errClose)
 		}
 		if errRead != nil {
-			if idx+1 < len(baseURLs) {
-				log.Debugf("antigravity executor: models read error on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+			if hasNext {
+				log.Debugf("antigravity executor: models read error on base url %s, retrying with fallback", baseURL)
 				continue
 			}
 			return nil
 		}
-		if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
-			if httpResp.StatusCode == http.StatusTooManyRequests && idx+1 < len(baseURLs) {
-				log.Debugf("antigravity executor: models request rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
-				continue
-			}
+
+		action, _ := handler.HandleResponse(ctx, httpResp.StatusCode, bodyBytes, hasNext)
+		if action == RetryActionContinueNext {
+			log.Debugf("antigravity executor: models request status %d on %s, trying next", httpResp.StatusCode, baseURL)
+			continue
+		}
+		if action != RetryActionSuccess {
 			return nil
 		}
 
@@ -453,8 +468,7 @@ func FetchAntigravityModels(ctx context.Context, auth *cliproxyauth.Auth, cfg *c
 		models := make([]*registry.ModelInfo, 0, len(result.Map()))
 
 		// Build a lookup map from static Gemini model definitions to inherit
-		// Thinking support and other metadata. Antigravity uses google antigravity
-		// which serves the same Gemini models, so we reuse GetGeminiCLIModels() definitions.
+		// Thinking support and other metadata.
 		staticModels := registry.GetGeminiCLIModels()
 		staticModelMap := make(map[string]*registry.ModelInfo, len(staticModels))
 		for _, m := range staticModels {
@@ -482,7 +496,6 @@ func FetchAntigravityModels(ctx context.Context, auth *cliproxyauth.Auth, cfg *c
 			}
 
 			// Set CanonicalID for Claude models to support both prefixed and non-prefixed names
-			// E.g., "gemini-claude-opus-4-5-thinking" canonical to "claude-opus-4-5-thinking"
 			if strings.HasPrefix(aliasName, "gemini-claude-") {
 				canonicalName := strings.TrimPrefix(aliasName, "gemini-")
 				modelInfo.CanonicalID = canonicalName
@@ -506,6 +519,10 @@ func FetchAntigravityModels(ctx context.Context, auth *cliproxyauth.Auth, cfg *c
 	return nil
 }
 
+// =============================================================================
+// Token Management
+// =============================================================================
+
 // tokenRefreshResult holds the result of a token refresh operation for singleflight.
 type tokenRefreshResult struct {
 	token string
@@ -514,13 +531,13 @@ type tokenRefreshResult struct {
 
 func (e *AntigravityExecutor) ensureAccessToken(ctx context.Context, auth *cliproxyauth.Auth) (string, *cliproxyauth.Auth, error) {
 	if auth == nil {
-		return "", nil, newCategorizedError(http.StatusUnauthorized, "missing auth", nil)
+		return "", nil, NewStatusError(http.StatusUnauthorized, "missing auth", nil)
 	}
 
 	// Fast path: token still valid
 	accessToken := metaStringValue(auth.Metadata, "access_token")
 	expiry := tokenExpiry(auth.Metadata)
-	if accessToken != "" && expiry.After(time.Now().Add(refreshSkew)) {
+	if accessToken != "" && expiry.After(time.Now().Add(DefaultRefreshSkew)) {
 		return accessToken, nil, nil
 	}
 
@@ -529,7 +546,7 @@ func (e *AntigravityExecutor) ensureAccessToken(ctx context.Context, auth *clipr
 		// Double-check inside singleflight - another goroutine may have just refreshed
 		accessToken := metaStringValue(auth.Metadata, "access_token")
 		expiry := tokenExpiry(auth.Metadata)
-		if accessToken != "" && expiry.After(time.Now().Add(refreshSkew)) {
+		if accessToken != "" && expiry.After(time.Now().Add(DefaultRefreshSkew)) {
 			return tokenRefreshResult{token: accessToken, auth: nil}, nil
 		}
 
@@ -553,11 +570,11 @@ func (e *AntigravityExecutor) ensureAccessToken(ctx context.Context, auth *clipr
 
 func (e *AntigravityExecutor) refreshToken(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
 	if auth == nil {
-		return nil, newCategorizedError(http.StatusUnauthorized, "missing auth", nil)
+		return nil, NewStatusError(http.StatusUnauthorized, "missing auth", nil)
 	}
 	refreshToken := metaStringValue(auth.Metadata, "refresh_token")
 	if refreshToken == "" {
-		return auth, newCategorizedError(http.StatusUnauthorized, "missing refresh token", nil)
+		return auth, NewStatusError(http.StatusUnauthorized, "missing refresh token", nil)
 	}
 
 	form := url.Values{}
@@ -571,7 +588,7 @@ func (e *AntigravityExecutor) refreshToken(ctx context.Context, auth *cliproxyau
 		return auth, errReq
 	}
 	httpReq.Header.Set("Host", "oauth2.googleapis.com")
-	httpReq.Header.Set("User-Agent", defaultAntigravityAgent)
+	httpReq.Header.Set("User-Agent", DefaultAntigravityUserAgent)
 	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
@@ -591,8 +608,7 @@ func (e *AntigravityExecutor) refreshToken(ctx context.Context, auth *cliproxyau
 	}
 
 	if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
-		// Use centralized error categorization
-		return auth, newCategorizedError(httpResp.StatusCode, string(bodyBytes), nil)
+		return auth, NewStatusError(httpResp.StatusCode, string(bodyBytes), nil)
 	}
 
 	var tokenResp struct {
@@ -607,15 +623,12 @@ func (e *AntigravityExecutor) refreshToken(ctx context.Context, auth *cliproxyau
 
 	// Validate token response
 	if tokenResp.AccessToken == "" {
-		return auth, newCategorizedError(http.StatusUnauthorized,
-			"invalid token response: missing access_token", nil)
+		return auth, NewStatusError(http.StatusUnauthorized, "invalid token response: missing access_token", nil)
 	}
 	if tokenResp.ExpiresIn < 0 {
-		return auth, newCategorizedError(http.StatusUnauthorized,
-			"invalid token response: negative expires_in", nil)
+		return auth, NewStatusError(http.StatusUnauthorized, "invalid token response: negative expires_in", nil)
 	}
 	if tokenResp.ExpiresIn == 0 {
-		// Default to 1 hour for Google OAuth if not specified
 		tokenResp.ExpiresIn = 3600
 		log.Debugf("antigravity: token response missing expires_in, using default 3600s")
 	}
@@ -634,9 +647,13 @@ func (e *AntigravityExecutor) refreshToken(ctx context.Context, auth *cliproxyau
 	return auth, nil
 }
 
+// =============================================================================
+// Request Building
+// =============================================================================
+
 func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyauth.Auth, token, modelName string, payload []byte, stream bool, alt, baseURL string) (*http.Request, error) {
 	if token == "" {
-		return nil, newCategorizedError(http.StatusUnauthorized, "missing access token", nil)
+		return nil, NewStatusError(http.StatusUnauthorized, "missing access token", nil)
 	}
 
 	base := strings.TrimSuffix(baseURL, "/")
@@ -712,6 +729,10 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 	return httpReq, nil
 }
 
+// =============================================================================
+// Helper Functions
+// =============================================================================
+
 func tokenExpiry(metadata map[string]any) time.Time {
 	if metadata == nil {
 		return time.Time{}
@@ -774,7 +795,7 @@ func buildBaseURL(auth *cliproxyauth.Auth) string {
 	if baseURLs := antigravityBaseURLFallbackOrder(auth); len(baseURLs) > 0 {
 		return baseURLs[0]
 	}
-	return antigravityBaseURLDaily
+	return AntigravityBaseURLDaily
 }
 
 func resolveHost(base string) string {
@@ -801,18 +822,16 @@ func resolveUserAgent(auth *cliproxyauth.Auth) string {
 			}
 		}
 	}
-	return defaultAntigravityAgent
+	return DefaultAntigravityUserAgent
 }
 
 func antigravityBaseURLFallbackOrder(auth *cliproxyauth.Auth) []string {
 	if base := resolveCustomAntigravityBaseURL(auth); base != "" {
 		return []string{base}
 	}
-	// Daily endpoint first (matches original CLIProxyAPI behavior)
-	// Production endpoint as fallback
 	return []string{
-		antigravityBaseURLDaily,
-		antigravityBaseURLProd,
+		AntigravityBaseURLDaily,
+		AntigravityBaseURLProd,
 	}
 }
 
@@ -836,11 +855,14 @@ func resolveCustomAntigravityBaseURL(auth *cliproxyauth.Auth) string {
 	return ""
 }
 
+// =============================================================================
+// Payload Transformation
+// =============================================================================
+
 func geminiToAntigravity(modelName string, payload []byte, projectID string) []byte {
 	template, _ := sjson.Set(string(payload), "model", modelName)
 	template, _ = sjson.Set(template, "userAgent", "antigravity")
 
-	// Use real project ID from auth if available, otherwise generate random (legacy fallback)
 	if projectID != "" {
 		template, _ = sjson.Set(template, "project", projectID)
 	} else {
@@ -852,14 +874,7 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 	template, _ = sjson.Delete(template, "request.safetySettings")
 	template, _ = sjson.Set(template, "request.toolConfig.functionCallingConfig.mode", "VALIDATED")
 
-	// Handle thinkingConfig and maxOutputTokens for different model types
-
 	if strings.Contains(modelName, "claude") {
-		// Schema cleanup for Vertex AI Claude API (OpenAPI 3.0 subset)
-		// Vertex AI Claude supports: type, properties, description, required, anyOf
-		// Does NOT support: $schema, $ref, $defs, exclusiveMin/Max
-		// Ignores (but accepts): minItems, maxItems, minLength, maxLength
-
 		gjson.Get(template, "request.tools").ForEach(func(key, tool gjson.Result) bool {
 			tool.Get("functionDeclarations").ForEach(func(funKey, funcDecl gjson.Result) bool {
 				if funcDecl.Get("parametersJsonSchema").Exists() {
@@ -873,24 +888,16 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 		})
 
 		strJSON := string(template)
-		// Remove unsupported JSON Schema fields (based on Vertex AI OpenAPI 3.0 subset)
 		strJSON = util.DeleteKey(strJSON, "request.tools.#.functionDeclarations.#.parameters.$schema")
 		strJSON = util.DeleteKey(strJSON, "request.tools.#.functionDeclarations.#.parameters.$ref")
 		strJSON = util.DeleteKey(strJSON, "request.tools.#.functionDeclarations.#.parameters.$defs")
 		strJSON = util.DeleteKey(strJSON, "request.tools.#.functionDeclarations.#.parameters.exclusiveMinimum")
 		strJSON = util.DeleteKey(strJSON, "request.tools.#.functionDeclarations.#.parameters.exclusiveMaximum")
-
-		// Optional: Remove validation constraints (ignored by Vertex AI but safe to keep)
-		// Removing them keeps schema minimal and avoids potential future issues
 		strJSON = util.DeleteKey(strJSON, "request.tools.#.functionDeclarations.#.parameters.minItems")
 		strJSON = util.DeleteKey(strJSON, "request.tools.#.functionDeclarations.#.parameters.maxItems")
 		strJSON = util.DeleteKey(strJSON, "request.tools.#.functionDeclarations.#.parameters.minLength")
 		strJSON = util.DeleteKey(strJSON, "request.tools.#.functionDeclarations.#.parameters.maxLength")
-
-		// NOTE: anyOf is SUPPORTED by Vertex AI Claude - do NOT remove it
 		template = strJSON
-
-	} else {
 	}
 
 	return []byte(template)
@@ -901,21 +908,16 @@ func generateRequestID() string {
 }
 
 func generateSessionID() string {
-	// Use uuid for thread-safe random generation instead of math/rand
-	// Format: negative number string (mimics original behavior)
 	uuidStr := uuid.NewString()
-	// Convert first 16 hex chars to int64-like string
 	return "-" + uuidStr[:8] + uuidStr[9:13] + uuidStr[14:18]
 }
 
-// projectIDAdjectives and projectIDNouns are used for generating random project IDs (legacy fallback).
 var (
 	projectIDAdjectives = []string{"useful", "bright", "swift", "calm", "bold"}
 	projectIDNouns      = []string{"fuze", "wave", "spark", "flow", "core"}
 )
 
 func generateProjectID() string {
-	// Use uuid bytes for thread-safe random selection
 	uuidBytes := []byte(uuid.NewString())
 	adj := projectIDAdjectives[int(uuidBytes[0])%len(projectIDAdjectives)]
 	noun := projectIDNouns[int(uuidBytes[1])%len(projectIDNouns)]
@@ -923,42 +925,23 @@ func generateProjectID() string {
 	return adj + "-" + noun + "-" + randomPart
 }
 
+// =============================================================================
+// Model Alias Functions (using maps instead of switch statements)
+// =============================================================================
+
 func modelName2Alias(modelName string) string {
-	switch modelName {
-	case "rev19-uic3-1p":
-		return "gemini-2.5-computer-use-preview-10-2025"
-	case "gemini-3-pro-image":
-		return "gemini-3-pro-image-preview"
-	case "gemini-3-pro-high":
-		return "gemini-3-pro-preview"
-	case "claude-sonnet-4-5":
-		return "gemini-claude-sonnet-4-5"
-	case "claude-sonnet-4-5-thinking":
-		return "gemini-claude-sonnet-4-5-thinking"
-	case "claude-opus-4-5-thinking":
-		return "gemini-claude-opus-4-5-thinking"
-	case "chat_20706", "chat_23310", "gemini-2.5-flash-thinking", "gemini-3-pro-low", "gemini-2.5-pro":
+	if hiddenModels[modelName] {
 		return ""
-	default:
-		return modelName
 	}
+	if alias, ok := modelNameToAlias[modelName]; ok {
+		return alias
+	}
+	return modelName
 }
 
 func alias2ModelName(modelName string) string {
-	switch modelName {
-	case "gemini-2.5-computer-use-preview-10-2025":
-		return "rev19-uic3-1p"
-	case "gemini-3-pro-image-preview":
-		return "gemini-3-pro-image"
-	case "gemini-3-pro-preview":
-		return "gemini-3-pro-high"
-	case "gemini-claude-sonnet-4-5", "claude-sonnet-4-5":
-		return "claude-sonnet-4-5"
-	case "gemini-claude-sonnet-4-5-thinking", "claude-sonnet-4-5-thinking":
-		return "claude-sonnet-4-5-thinking"
-	case "gemini-claude-opus-4-5-thinking", "claude-opus-4-5-thinking":
-		return "claude-opus-4-5-thinking"
-	default:
-		return modelName
+	if name, ok := modelAliasToName[modelName]; ok {
+		return name
 	}
+	return modelName
 }

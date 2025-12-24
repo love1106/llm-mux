@@ -16,7 +16,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	clineauth "github.com/nghyane/llm-mux/internal/auth/cline"
 	"github.com/nghyane/llm-mux/internal/config"
@@ -24,10 +23,6 @@ import (
 	cliproxyexecutor "github.com/nghyane/llm-mux/sdk/cliproxy/executor"
 	sdktranslator "github.com/nghyane/llm-mux/sdk/translator"
 	log "github.com/sirupsen/logrus"
-)
-
-const (
-	clineAPIBaseURL = "https://api.cline.bot"
 )
 
 // ClineExecutor is a stateless executor for Cline API using OpenAI-compatible chat completions.
@@ -58,7 +53,7 @@ func (e *ClineExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	}
 
 	if baseURL == "" {
-		baseURL = clineAPIBaseURL
+		baseURL = ClineDefaultBaseURL
 	}
 
 	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
@@ -122,7 +117,7 @@ func (e *ClineExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	}
 
 	if baseURL == "" {
-		baseURL = clineAPIBaseURL
+		baseURL = ClineDefaultBaseURL
 	}
 
 	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
@@ -346,33 +341,24 @@ func (e *ClineExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*
 	if auth == nil {
 		return nil, fmt.Errorf("cline executor: auth is nil")
 	}
-	var refreshToken string
-	if auth.Metadata != nil {
-		if v, ok := auth.Metadata["refresh_token"].(string); ok && v != "" {
-			refreshToken = v
-		}
-	}
-	if refreshToken == "" {
+
+	refreshToken, ok := ExtractRefreshToken(auth)
+	if !ok {
 		return auth, nil
 	}
+
 	svc := clineauth.NewClineAuth(e.cfg)
 	td, err := svc.RefreshTokens(ctx, refreshToken)
 	if err != nil {
 		return nil, err
 	}
-	if auth.Metadata == nil {
-		auth.Metadata = make(map[string]any)
-	}
-	auth.Metadata["access_token"] = td.AccessToken
-	if td.RefreshToken != "" {
-		auth.Metadata["refresh_token"] = td.RefreshToken
-	}
-	if td.Email != "" {
-		auth.Metadata["email"] = td.Email
-	}
-	auth.Metadata["expired"] = td.Expire
-	auth.Metadata["type"] = "cline"
-	now := time.Now().Format(time.RFC3339)
-	auth.Metadata["last_refresh"] = now
+
+	UpdateRefreshMetadata(auth, map[string]any{
+		"access_token":  td.AccessToken,
+		"refresh_token": td.RefreshToken,
+		"email":         td.Email,
+		"expired":       td.Expire,
+	}, "cline")
+
 	return auth, nil
 }

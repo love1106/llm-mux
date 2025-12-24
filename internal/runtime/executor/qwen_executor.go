@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	qwenauth "github.com/nghyane/llm-mux/internal/auth/qwen"
 	"github.com/nghyane/llm-mux/internal/config"
@@ -21,7 +20,6 @@ import (
 )
 
 const (
-	qwenUserAgent           = "google-api-nodejs-client/9.15.1"
 	qwenXGoogAPIClient      = "gl-node/22.17.0"
 	qwenClientMetadataValue = "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI"
 )
@@ -42,7 +40,7 @@ func (e *QwenExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 	token, baseURL := qwenCreds(auth)
 
 	if baseURL == "" {
-		baseURL = "https://portal.qwen.ai/v1"
+		baseURL = QwenDefaultBaseURL
 	}
 	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 	defer reporter.trackFailure(ctx, &err)
@@ -98,7 +96,7 @@ func (e *QwenExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 	token, baseURL := qwenCreds(auth)
 
 	if baseURL == "" {
-		baseURL = "https://portal.qwen.ai/v1"
+		baseURL = QwenDefaultBaseURL
 	}
 	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 	defer reporter.trackFailure(ctx, &err)
@@ -229,15 +227,9 @@ func (e *QwenExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*c
 	if auth == nil {
 		return nil, fmt.Errorf("qwen executor: auth is nil")
 	}
-	// Expect refresh_token in metadata for OAuth-based accounts
-	var refreshToken string
-	if auth.Metadata != nil {
-		if v, ok := auth.Metadata["refresh_token"].(string); ok && strings.TrimSpace(v) != "" {
-			refreshToken = v
-		}
-	}
-	if strings.TrimSpace(refreshToken) == "" {
-		// Nothing to refresh
+
+	refreshToken, ok := ExtractRefreshToken(auth)
+	if !ok {
 		return auth, nil
 	}
 
@@ -246,28 +238,21 @@ func (e *QwenExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*c
 	if err != nil {
 		return nil, err
 	}
-	if auth.Metadata == nil {
-		auth.Metadata = make(map[string]any)
-	}
-	auth.Metadata["access_token"] = td.AccessToken
-	if td.RefreshToken != "" {
-		auth.Metadata["refresh_token"] = td.RefreshToken
-	}
-	if td.ResourceURL != "" {
-		auth.Metadata["resource_url"] = td.ResourceURL
-	}
-	// Use "expired" for consistency with existing file format
-	auth.Metadata["expired"] = td.Expire
-	auth.Metadata["type"] = "qwen"
-	now := time.Now().Format(time.RFC3339)
-	auth.Metadata["last_refresh"] = now
+
+	UpdateRefreshMetadata(auth, map[string]any{
+		"access_token":  td.AccessToken,
+		"refresh_token": td.RefreshToken,
+		"resource_url":  td.ResourceURL,
+		"expired":       td.Expire,
+	}, "qwen")
+
 	return auth, nil
 }
 
 func applyQwenHeaders(r *http.Request, token string, stream bool) {
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Authorization", "Bearer "+token)
-	r.Header.Set("User-Agent", qwenUserAgent)
+	r.Header.Set("User-Agent", DefaultQwenUserAgent)
 	r.Header.Set("X-Goog-Api-Client", qwenXGoogAPIClient)
 	r.Header.Set("Client-Metadata", qwenClientMetadataValue)
 	if stream {

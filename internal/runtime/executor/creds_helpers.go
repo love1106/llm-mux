@@ -3,6 +3,7 @@ package executor
 
 import (
 	"strings"
+	"time"
 
 	"github.com/nghyane/llm-mux/sdk/cliproxy/auth"
 )
@@ -94,6 +95,34 @@ func ExtractCreds(a *auth.Auth, cfg CredExtractorConfig) (token, url string) {
 
 // Predefined configurations for each provider.
 // These encapsulate the specific credential extraction logic for each provider.
+
+// ExtractRefreshToken extracts refresh token from auth metadata.
+// Returns empty string and false if not found.
+func ExtractRefreshToken(auth *auth.Auth) (string, bool) {
+	if auth == nil || auth.Metadata == nil {
+		return "", false
+	}
+	if v, ok := auth.Metadata["refresh_token"].(string); ok && strings.TrimSpace(v) != "" {
+		return v, true
+	}
+	return "", false
+}
+
+// UpdateRefreshMetadata updates common metadata fields after token refresh.
+// The updates map should contain provider-specific fields like "access_token", "refresh_token", etc.
+// This function automatically adds "type" and "last_refresh" fields.
+func UpdateRefreshMetadata(auth *auth.Auth, updates map[string]any, providerType string) {
+	if auth.Metadata == nil {
+		auth.Metadata = make(map[string]any)
+	}
+	for k, v := range updates {
+		if v != nil && v != "" {
+			auth.Metadata[k] = v
+		}
+	}
+	auth.Metadata["type"] = providerType
+	auth.Metadata["last_refresh"] = time.Now().Format(time.RFC3339)
+}
 
 var (
 	// ClaudeCredsConfig extracts credentials for Claude API.

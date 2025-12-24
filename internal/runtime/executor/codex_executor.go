@@ -44,7 +44,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	apiKey, baseURL := codexCreds(auth)
 
 	if baseURL == "" {
-		baseURL = "https://chatgpt.com/backend-api/codex"
+		baseURL = CodexDefaultBaseURL
 	}
 	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 	defer reporter.trackFailure(ctx, &err)
@@ -114,7 +114,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		}
 		return resp, nil
 	}
-	err = statusErr{code: 408, msg: "stream error: stream disconnected before completion: stream closed before response.completed"}
+	err = NewStatusError(408, "stream error: stream disconnected before completion: stream closed before response.completed", nil)
 	return resp, err
 }
 
@@ -122,7 +122,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	apiKey, baseURL := codexCreds(auth)
 
 	if baseURL == "" {
-		baseURL = "https://chatgpt.com/backend-api/codex"
+		baseURL = CodexDefaultBaseURL
 	}
 	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 	defer reporter.trackFailure(ctx, &err)
@@ -159,7 +159,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		}
 		// Codex uses categorized error for consistency
 		log.Debugf("codex executor: error status: %d, body: %s", httpResp.StatusCode, summarizeErrorBody(httpResp.Header.Get("Content-Type"), data))
-		return nil, newCategorizedError(httpResp.StatusCode, string(data), nil)
+		return nil, NewStatusError(httpResp.StatusCode, string(data), nil)
 	}
 	out := make(chan cliproxyexecutor.StreamChunk)
 	stream = out
@@ -251,81 +251,96 @@ func (e *CodexExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth
 	return cliproxyexecutor.Response{Payload: []byte(translated)}, nil
 }
 
+// reasoningModelConfig defines model aliases and their reasoning settings.
+type reasoningModelConfig struct {
+	BaseModel string            // The upstream model name
+	Efforts   map[string]string // alias -> effort level mapping (empty string = no effort override)
+}
+
+// codexReasoningConfigs maps model aliases to their base model and reasoning effort.
+// To add a new model or alias, simply add a new entry to this slice.
+var codexReasoningConfigs = []reasoningModelConfig{
+	{
+		BaseModel: "gpt-5",
+		Efforts: map[string]string{
+			"gpt-5":         "",
+			"gpt-5-minimal": "minimal",
+			"gpt-5-low":     "low",
+			"gpt-5-medium":  "medium",
+			"gpt-5-high":    "high",
+		},
+	},
+	{
+		BaseModel: "gpt-5-codex",
+		Efforts: map[string]string{
+			"gpt-5-codex":        "",
+			"gpt-5-codex-low":    "low",
+			"gpt-5-codex-medium": "medium",
+			"gpt-5-codex-high":   "high",
+		},
+	},
+	{
+		BaseModel: "gpt-5-codex-mini",
+		Efforts: map[string]string{
+			"gpt-5-codex-mini":        "",
+			"gpt-5-codex-mini-medium": "medium",
+			"gpt-5-codex-mini-high":   "high",
+		},
+	},
+	{
+		BaseModel: "gpt-5.1",
+		Efforts: map[string]string{
+			"gpt-5.1":        "",
+			"gpt-5.1-none":   "none",
+			"gpt-5.1-low":    "low",
+			"gpt-5.1-medium": "medium",
+			"gpt-5.1-high":   "high",
+		},
+	},
+	{
+		BaseModel: "gpt-5.1-codex",
+		Efforts: map[string]string{
+			"gpt-5.1-codex":        "",
+			"gpt-5.1-codex-low":    "low",
+			"gpt-5.1-codex-medium": "medium",
+			"gpt-5.1-codex-high":   "high",
+		},
+	},
+	{
+		BaseModel: "gpt-5.1-codex-mini",
+		Efforts: map[string]string{
+			"gpt-5.1-codex-mini":        "",
+			"gpt-5.1-codex-mini-medium": "medium",
+			"gpt-5.1-codex-mini-high":   "high",
+		},
+	},
+	{
+		BaseModel: "gpt-5.1-codex-max",
+		Efforts: map[string]string{
+			"gpt-5.1-codex-max":        "",
+			"gpt-5.1-codex-max-low":    "low",
+			"gpt-5.1-codex-max-medium": "medium",
+			"gpt-5.1-codex-max-high":   "high",
+			"gpt-5.1-codex-max-xhigh":  "xhigh",
+		},
+	},
+	{
+		BaseModel: "gpt-5.2",
+		Efforts: map[string]string{
+			"gpt-5.2": "",
+		},
+	},
+}
+
 func (e *CodexExecutor) setReasoningEffortByAlias(modelName string, payload []byte) []byte {
-	if util.InArray([]string{"gpt-5", "gpt-5-minimal", "gpt-5-low", "gpt-5-medium", "gpt-5-high"}, modelName) {
-		payload, _ = sjson.SetBytes(payload, "model", "gpt-5")
-		switch modelName {
-		case "gpt-5-minimal":
-			payload, _ = sjson.SetBytes(payload, "reasoning.effort", "minimal")
-		case "gpt-5-low":
-			payload, _ = sjson.SetBytes(payload, "reasoning.effort", "low")
-		case "gpt-5-medium":
-			payload, _ = sjson.SetBytes(payload, "reasoning.effort", "medium")
-		case "gpt-5-high":
-			payload, _ = sjson.SetBytes(payload, "reasoning.effort", "high")
+	for _, cfg := range codexReasoningConfigs {
+		if effort, ok := cfg.Efforts[modelName]; ok {
+			payload, _ = sjson.SetBytes(payload, "model", cfg.BaseModel)
+			if effort != "" {
+				payload, _ = sjson.SetBytes(payload, "reasoning.effort", effort)
+			}
+			return payload
 		}
-	} else if util.InArray([]string{"gpt-5-codex", "gpt-5-codex-low", "gpt-5-codex-medium", "gpt-5-codex-high"}, modelName) {
-		payload, _ = sjson.SetBytes(payload, "model", "gpt-5-codex")
-		switch modelName {
-		case "gpt-5-codex-low":
-			payload, _ = sjson.SetBytes(payload, "reasoning.effort", "low")
-		case "gpt-5-codex-medium":
-			payload, _ = sjson.SetBytes(payload, "reasoning.effort", "medium")
-		case "gpt-5-codex-high":
-			payload, _ = sjson.SetBytes(payload, "reasoning.effort", "high")
-		}
-	} else if util.InArray([]string{"gpt-5-codex-mini", "gpt-5-codex-mini-medium", "gpt-5-codex-mini-high"}, modelName) {
-		payload, _ = sjson.SetBytes(payload, "model", "gpt-5-codex-mini")
-		switch modelName {
-		case "gpt-5-codex-mini-medium":
-			payload, _ = sjson.SetBytes(payload, "reasoning.effort", "medium")
-		case "gpt-5-codex-mini-high":
-			payload, _ = sjson.SetBytes(payload, "reasoning.effort", "high")
-		}
-	} else if util.InArray([]string{"gpt-5.1", "gpt-5.1-none", "gpt-5.1-low", "gpt-5.1-medium", "gpt-5.1-high"}, modelName) {
-		payload, _ = sjson.SetBytes(payload, "model", "gpt-5.1")
-		switch modelName {
-		case "gpt-5.1-none":
-			payload, _ = sjson.SetBytes(payload, "reasoning.effort", "none")
-		case "gpt-5.1-low":
-			payload, _ = sjson.SetBytes(payload, "reasoning.effort", "low")
-		case "gpt-5.1-medium":
-			payload, _ = sjson.SetBytes(payload, "reasoning.effort", "medium")
-		case "gpt-5.1-high":
-			payload, _ = sjson.SetBytes(payload, "reasoning.effort", "high")
-		}
-	} else if util.InArray([]string{"gpt-5.1-codex", "gpt-5.1-codex-low", "gpt-5.1-codex-medium", "gpt-5.1-codex-high"}, modelName) {
-		payload, _ = sjson.SetBytes(payload, "model", "gpt-5.1-codex")
-		switch modelName {
-		case "gpt-5.1-codex-low":
-			payload, _ = sjson.SetBytes(payload, "reasoning.effort", "low")
-		case "gpt-5.1-codex-medium":
-			payload, _ = sjson.SetBytes(payload, "reasoning.effort", "medium")
-		case "gpt-5.1-codex-high":
-			payload, _ = sjson.SetBytes(payload, "reasoning.effort", "high")
-		}
-	} else if util.InArray([]string{"gpt-5.1-codex-mini", "gpt-5.1-codex-mini-medium", "gpt-5.1-codex-mini-high"}, modelName) {
-		payload, _ = sjson.SetBytes(payload, "model", "gpt-5.1-codex-mini")
-		switch modelName {
-		case "gpt-5.1-codex-mini-medium":
-			payload, _ = sjson.SetBytes(payload, "reasoning.effort", "medium")
-		case "gpt-5.1-codex-mini-high":
-			payload, _ = sjson.SetBytes(payload, "reasoning.effort", "high")
-		}
-	} else if util.InArray([]string{"gpt-5.1-codex-max", "gpt-5.1-codex-max-low", "gpt-5.1-codex-max-medium", "gpt-5.1-codex-max-high", "gpt-5.1-codex-max-xhigh"}, modelName) {
-		payload, _ = sjson.SetBytes(payload, "model", "gpt-5.1-codex-max")
-		switch modelName {
-		case "gpt-5.1-codex-max-low":
-			payload, _ = sjson.SetBytes(payload, "reasoning.effort", "low")
-		case "gpt-5.1-codex-max-medium":
-			payload, _ = sjson.SetBytes(payload, "reasoning.effort", "medium")
-		case "gpt-5.1-codex-max-high":
-			payload, _ = sjson.SetBytes(payload, "reasoning.effort", "high")
-		case "gpt-5.1-codex-max-xhigh":
-			payload, _ = sjson.SetBytes(payload, "reasoning.effort", "xhigh")
-		}
-	} else if util.InArray([]string{"gpt-5.2"}, modelName) {
-		payload, _ = sjson.SetBytes(payload, "model", "gpt-5.2")
 	}
 	return payload
 }
@@ -454,7 +469,7 @@ func countCodexInputTokens(enc tokenizer.Codec, body []byte) (int64, error) {
 
 func (e *CodexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
 	if auth == nil {
-		return nil, statusErr{code: 500, msg: "codex executor: auth is nil"}
+		return nil, NewStatusError(500, "codex executor: auth is nil", nil)
 	}
 	var refreshToken string
 	if auth.Metadata != nil {
@@ -534,7 +549,7 @@ func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string) {
 	misc.EnsureHeader(r.Header, ginHeaders, "Version", "0.21.0")
 	misc.EnsureHeader(r.Header, ginHeaders, "Openai-Beta", "responses=experimental")
 	misc.EnsureHeader(r.Header, ginHeaders, "Session_id", uuid.NewString())
-	misc.EnsureHeader(r.Header, ginHeaders, "User-Agent", "codex_cli_rs/1.104.1 (Mac OS 26.0.1; arm64) Apple_Terminal/464")
+	misc.EnsureHeader(r.Header, ginHeaders, "User-Agent", DefaultCodexUserAgent)
 
 	r.Header.Set("Accept", "text/event-stream")
 	r.Header.Set("Connection", "Keep-Alive")

@@ -22,7 +22,6 @@ import (
 
 const (
 	iflowDefaultEndpoint = "/chat/completions"
-	iflowUserAgent       = "iFlow-Cli"
 )
 
 // IFlowExecutor executes OpenAI-compatible chat completions against the iFlow API using API keys derived from OAuth.
@@ -367,7 +366,7 @@ func (e *IFlowExecutor) refreshOAuthBased(ctx context.Context, auth *cliproxyaut
 func applyIFlowHeaders(r *http.Request, apiKey string, stream bool) {
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Authorization", "Bearer "+apiKey)
-	r.Header.Set("User-Agent", iflowUserAgent)
+	r.Header.Set("User-Agent", DefaultIFlowUserAgent)
 	if stream {
 		r.Header.Set("Accept", "text/event-stream")
 	} else {

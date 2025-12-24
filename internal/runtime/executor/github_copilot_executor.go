@@ -20,13 +20,9 @@ import (
 )
 
 const (
-	githubCopilotBaseURL       = "https://api.githubcopilot.com"
-	githubCopilotChatPath      = "/chat/completions"
-	githubCopilotAuthType      = "github-copilot"
-	githubCopilotTokenCacheTTL = 25 * time.Minute
-	tokenExpiryBuffer          = 5 * time.Minute
+	githubCopilotChatPath = "/chat/completions"
+	githubCopilotAuthType = "github-copilot"
 
-	copilotUserAgent     = "GithubCopilot/1.0"
 	copilotEditorVersion = "vscode/1.104.1"
 	copilotPluginVersion = "copilot/1.300.0"
 	copilotIntegrationID = "vscode-chat"
@@ -77,7 +73,7 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 	body = applyPayloadConfig(e.cfg, req.Model, body)
 	body, _ = sjson.SetBytes(body, "stream", false)
 
-	url := githubCopilotBaseURL + githubCopilotChatPath
+	url := GitHubCopilotDefaultBaseURL + githubCopilotChatPath
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return resp, err
@@ -138,7 +134,7 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 	body, _ = sjson.SetBytes(body, "stream", true)
 	body, _ = sjson.SetBytes(body, "stream_options.include_usage", true)
 
-	url := githubCopilotBaseURL + githubCopilotChatPath
+	url := GitHubCopilotDefaultBaseURL + githubCopilotChatPath
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -222,12 +218,12 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 }
 
 func (e *GitHubCopilotExecutor) CountTokens(_ context.Context, _ *cliproxyauth.Auth, _ cliproxyexecutor.Request, _ cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
-	return cliproxyexecutor.Response{}, statusErr{code: http.StatusNotImplemented, msg: "count tokens not supported for github-copilot"}
+	return cliproxyexecutor.Response{}, NewStatusError(http.StatusNotImplemented, "count tokens not supported for github-copilot", nil)
 }
 
 func (e *GitHubCopilotExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
 	if auth == nil {
-		return nil, statusErr{code: http.StatusUnauthorized, msg: "missing auth"}
+		return nil, NewStatusError(http.StatusUnauthorized, "missing auth", nil)
 	}
 
 	accessToken := metaStringValue(auth.Metadata, "access_token")
@@ -238,7 +234,7 @@ func (e *GitHubCopilotExecutor) Refresh(ctx context.Context, auth *cliproxyauth.
 	copilotAuth := copilotauth.NewCopilotAuth(e.cfg)
 	_, err := copilotAuth.GetCopilotAPIToken(ctx, accessToken)
 	if err != nil {
-		return nil, statusErr{code: http.StatusUnauthorized, msg: fmt.Sprintf("github-copilot token validation failed: %v", err)}
+		return nil, NewStatusError(http.StatusUnauthorized, fmt.Sprintf("github-copilot token validation failed: %v", err), nil)
 	}
 
 	return auth, nil
@@ -246,17 +242,17 @@ func (e *GitHubCopilotExecutor) Refresh(ctx context.Context, auth *cliproxyauth.
 
 func (e *GitHubCopilotExecutor) ensureAPIToken(ctx context.Context, auth *cliproxyauth.Auth) (string, error) {
 	if auth == nil {
-		return "", statusErr{code: http.StatusUnauthorized, msg: "missing auth"}
+		return "", NewStatusError(http.StatusUnauthorized, "missing auth", nil)
 	}
 
 	accessToken := metaStringValue(auth.Metadata, "access_token")
 	if accessToken == "" {
-		return "", statusErr{code: http.StatusUnauthorized, msg: "missing github access token"}
+		return "", NewStatusError(http.StatusUnauthorized, "missing github access token", nil)
 	}
 
 	// Check cache first
 	e.mu.RLock()
-	if cached, ok := e.cache[accessToken]; ok && cached.expiresAt.After(time.Now().Add(tokenExpiryBuffer)) {
+	if cached, ok := e.cache[accessToken]; ok && cached.expiresAt.After(time.Now().Add(TokenExpiryBuffer)) {
 		e.mu.RUnlock()
 		return cached.token, nil
 	}
@@ -266,7 +262,7 @@ func (e *GitHubCopilotExecutor) ensureAPIToken(ctx context.Context, auth *clipro
 	result, err, _ := e.sfGroup.Do(accessToken, func() (interface{}, error) {
 		// Check cache again in case another goroutine just filled it
 		e.mu.RLock()
-		if cached, ok := e.cache[accessToken]; ok && cached.expiresAt.After(time.Now().Add(tokenExpiryBuffer)) {
+		if cached, ok := e.cache[accessToken]; ok && cached.expiresAt.After(time.Now().Add(TokenExpiryBuffer)) {
 			e.mu.RUnlock()
 			return cached.token, nil
 		}
@@ -275,10 +271,10 @@ func (e *GitHubCopilotExecutor) ensureAPIToken(ctx context.Context, auth *clipro
 		copilotAuth := copilotauth.NewCopilotAuth(e.cfg)
 		apiToken, err := copilotAuth.GetCopilotAPIToken(ctx, accessToken)
 		if err != nil {
-			return "", statusErr{code: http.StatusUnauthorized, msg: fmt.Sprintf("failed to get copilot api token: %v", err)}
+			return "", NewStatusError(http.StatusUnauthorized, fmt.Sprintf("failed to get copilot api token: %v", err), nil)
 		}
 
-		expiresAt := time.Now().Add(githubCopilotTokenCacheTTL)
+		expiresAt := time.Now().Add(GitHubCopilotTokenCacheTTL)
 		if apiToken.ExpiresAt > 0 {
 			expiresAt = time.Unix(apiToken.ExpiresAt, 0)
 		}
@@ -302,7 +298,7 @@ func (e *GitHubCopilotExecutor) applyHeaders(r *http.Request, apiToken string) {
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Authorization", "Bearer "+apiToken)
 	r.Header.Set("Accept", "application/json")
-	r.Header.Set("User-Agent", copilotUserAgent)
+	r.Header.Set("User-Agent", DefaultCopilotUserAgent)
 	r.Header.Set("Editor-Version", copilotEditorVersion)
 	r.Header.Set("Editor-Plugin-Version", copilotPluginVersion)
 	r.Header.Set("Openai-Intent", copilotOpenAIIntent)

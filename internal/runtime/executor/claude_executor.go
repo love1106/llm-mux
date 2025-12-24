@@ -1,10 +1,7 @@
 package executor
 
 import (
-	"bufio"
 	"bytes"
-	"compress/flate"
-	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -12,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/andybalholm/brotli"
-	"github.com/klauspost/compress/zstd"
 	"github.com/nghyane/llm-mux/internal/auth/claude"
 	"github.com/nghyane/llm-mux/internal/config"
 	"github.com/nghyane/llm-mux/internal/misc"
 	"github.com/nghyane/llm-mux/internal/registry"
+	"github.com/nghyane/llm-mux/internal/translator/from_ir"
+	"github.com/nghyane/llm-mux/internal/translator/ir"
 	"github.com/nghyane/llm-mux/internal/translator/to_ir"
 	"github.com/nghyane/llm-mux/internal/util"
 	cliproxyauth "github.com/nghyane/llm-mux/sdk/cliproxy/auth"
@@ -36,6 +33,60 @@ type ClaudeExecutor struct {
 	cfg *config.Config
 }
 
+// =============================================================================
+// Claude Stream Processors (implements StreamProcessor interface)
+// =============================================================================
+
+// claudeStreamProcessor processes Claude SSE stream lines with translation.
+type claudeStreamProcessor struct {
+	cfg       *config.Config
+	from      sdktranslator.Format
+	model     string
+	messageID string
+	state     *from_ir.ClaudeStreamState
+}
+
+// ProcessLine implements StreamProcessor.ProcessLine for Claude streams.
+func (p *claudeStreamProcessor) ProcessLine(line []byte) ([][]byte, *ir.Usage, error) {
+	result, err := TranslateClaudeResponseStreamWithUsage(p.cfg, p.from, line, p.model, p.messageID, p.state)
+	if err != nil {
+		return nil, nil, err
+	}
+	if result == nil {
+		return nil, nil, nil
+	}
+	return result.Chunks, result.Usage, nil
+}
+
+// ProcessDone implements StreamProcessor.ProcessDone (no-op for Claude).
+func (p *claudeStreamProcessor) ProcessDone() ([][]byte, error) {
+	return nil, nil
+}
+
+// claudePassthroughProcessor handles Claude-to-Claude passthrough mode.
+// It extracts usage for tracking but passes through the raw SSE lines.
+type claudePassthroughProcessor struct {
+	cfg   *config.Config
+	from  sdktranslator.Format
+	model string
+}
+
+// ProcessLine implements StreamProcessor.ProcessLine for passthrough mode.
+// Returns nil chunks to trigger PassthroughOnEmpty behavior in RunSSEStream.
+func (p *claudePassthroughProcessor) ProcessLine(line []byte) ([][]byte, *ir.Usage, error) {
+	// Extract usage even in passthrough mode
+	result, _ := TranslateClaudeResponseStreamWithUsage(p.cfg, p.from, line, p.model, "msg-dummy", nil)
+	if result != nil && result.Usage != nil {
+		return nil, result.Usage, nil
+	}
+	return nil, nil, nil
+}
+
+// ProcessDone implements StreamProcessor.ProcessDone (no-op for passthrough).
+func (p *claudePassthroughProcessor) ProcessDone() ([][]byte, error) {
+	return nil, nil
+}
+
 func NewClaudeExecutor(cfg *config.Config) *ClaudeExecutor { return &ClaudeExecutor{cfg: cfg} }
 
 func (e *ClaudeExecutor) Identifier() string { return "claude" }
@@ -46,7 +97,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	apiKey, baseURL := claudeCreds(auth)
 
 	if baseURL == "" {
-		baseURL = "https://api.anthropic.com"
+		baseURL = ClaudeDefaultBaseURL
 	}
 	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 	defer reporter.trackFailure(ctx, &err)
@@ -92,7 +143,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		b, _ := io.ReadAll(httpResp.Body)
 		log.Debugf("request error, error status: %d, error body: %s", httpResp.StatusCode, summarizeErrorBody(httpResp.Header.Get("Content-Type"), b))
-		err = newCategorizedError(httpResp.StatusCode, string(b), nil)
+		err = NewStatusError(httpResp.StatusCode, string(b), nil)
 		if errClose := httpResp.Body.Close(); errClose != nil {
 			log.Errorf("response body close error: %v", errClose)
 		}
@@ -146,7 +197,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	apiKey, baseURL := claudeCreds(auth)
 
 	if baseURL == "" {
-		baseURL = "https://api.anthropic.com"
+		baseURL = ClaudeDefaultBaseURL
 	}
 	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 	defer reporter.trackFailure(ctx, &err)
@@ -191,7 +242,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		if errClose := httpResp.Body.Close(); errClose != nil {
 			log.Errorf("response body close error: %v", errClose)
 		}
-		err = newCategorizedError(httpResp.StatusCode, string(b), nil)
+		err = NewStatusError(httpResp.StatusCode, string(b), nil)
 		return nil, err
 	}
 	decodedBody, err := decodeResponseBody(httpResp.Body, httpResp.Header.Get("Content-Encoding"))
@@ -201,111 +252,39 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		}
 		return nil, err
 	}
-	out := make(chan cliproxyexecutor.StreamChunk)
-	stream = out
-	go func() {
-		defer close(out)
-		defer func() {
-			if errClose := decodedBody.Close(); errClose != nil {
-				log.Errorf("response body close error: %v", errClose)
-			}
-		}()
 
-		// If from == claude (Claude → Claude), directly forward the SSE stream without translation
-		if from.String() == "claude" {
-			scanner := bufio.NewScanner(decodedBody)
-			scanner.Buffer(make([]byte, 64*1024), DefaultStreamBufferSize)
-			for scanner.Scan() {
-				// Check context cancellation before processing each line
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-
-				line := scanner.Bytes()
-				// Use translator to extract usage even in passthrough mode
-				result, _ := TranslateClaudeResponseStreamWithUsage(e.cfg, from, line, req.Model, "msg-dummy", nil)
-				if result != nil && result.Usage != nil {
-					reporter.publish(ctx, result.Usage)
-				}
-
-				// Forward the line as-is to preserve SSE format
-				// We need a copy of the bytes because scanner.Bytes() is reused
-				cloned := make([]byte, len(line)+1)
-				copy(cloned, line)
-				cloned[len(line)] = '\n'
-				select {
-				case out <- cliproxyexecutor.StreamChunk{Payload: cloned}:
-				case <-ctx.Done():
-					return
-				}
-			}
-			if errScan := scanner.Err(); errScan != nil {
-				reporter.publishFailure(ctx)
-				select {
-				case out <- cliproxyexecutor.StreamChunk{Err: errScan}:
-				case <-ctx.Done():
-				}
-			}
-			return
+	// Use RunSSEStream with appropriate processor based on source format
+	if from.String() == "claude" {
+		// Claude → Claude passthrough mode
+		processor := &claudePassthroughProcessor{
+			cfg:   e.cfg,
+			from:  from,
+			model: req.Model,
 		}
+		return RunSSEStream(ctx, decodedBody, reporter, processor, StreamConfig{
+			ExecutorName:       "claude",
+			PassthroughOnEmpty: true, // Forward raw lines when no chunks are returned
+		}), nil
+	}
 
-		// For other formats, use translation
-		scanner := bufio.NewScanner(decodedBody)
-		scanner.Buffer(make([]byte, 64*1024), DefaultStreamBufferSize)
-		messageID := "msg-" + req.Model
-
-		for scanner.Scan() {
-			// Check context cancellation before processing each line
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-
-			line := scanner.Bytes()
-			result, errTranslate := TranslateClaudeResponseStreamWithUsage(e.cfg, from, line, req.Model, messageID, nil)
-
-			if errTranslate != nil {
-				// Log but continue if possible, or fail
-				select {
-				case out <- cliproxyexecutor.StreamChunk{Err: errTranslate}:
-				case <-ctx.Done():
-				}
-				return
-			}
-
-			if result != nil {
-				if result.Usage != nil {
-					reporter.publish(ctx, result.Usage)
-				}
-				for _, chunk := range result.Chunks {
-					select {
-					case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}
-		}
-
-		if errScan := scanner.Err(); errScan != nil {
-			reporter.publishFailure(ctx)
-			select {
-			case out <- cliproxyexecutor.StreamChunk{Err: errScan}:
-			case <-ctx.Done():
-			}
-		}
-	}()
-	return stream, nil
+	// For other formats, use translation processor
+	processor := &claudeStreamProcessor{
+		cfg:       e.cfg,
+		from:      from,
+		model:     req.Model,
+		messageID: "msg-" + req.Model,
+		state:     from_ir.NewClaudeStreamState(),
+	}
+	return RunSSEStream(ctx, decodedBody, reporter, processor, StreamConfig{
+		ExecutorName: "claude",
+	}), nil
 }
 
 func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	apiKey, baseURL := claudeCreds(auth)
 
 	if baseURL == "" {
-		baseURL = "https://api.anthropic.com"
+		baseURL = ClaudeDefaultBaseURL
 	}
 
 	from := opts.SourceFormat
@@ -345,7 +324,7 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 		if errClose := resp.Body.Close(); errClose != nil {
 			log.Errorf("response body close error: %v", errClose)
 		}
-		return cliproxyexecutor.Response{}, newCategorizedError(resp.StatusCode, string(b), nil)
+		return cliproxyexecutor.Response{}, NewStatusError(resp.StatusCode, string(b), nil)
 	}
 	decodedBody, err := decodeResponseBody(resp.Body, resp.Header.Get("Content-Encoding"))
 	if err != nil {
@@ -559,86 +538,6 @@ func (e *ClaudeExecutor) resolveClaudeConfig(auth *cliproxyauth.Auth) *config.Cl
 	return nil
 }
 
-type compositeReadCloser struct {
-	io.Reader
-	closers []func() error
-}
-
-func (c *compositeReadCloser) Close() error {
-	var firstErr error
-	for i := range c.closers {
-		if c.closers[i] == nil {
-			continue
-		}
-		if err := c.closers[i](); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
-}
-
-func decodeResponseBody(body io.ReadCloser, contentEncoding string) (io.ReadCloser, error) {
-	if body == nil {
-		return nil, fmt.Errorf("response body is nil")
-	}
-	if contentEncoding == "" {
-		return body, nil
-	}
-	encodings := strings.Split(contentEncoding, ",")
-	for _, raw := range encodings {
-		encoding := strings.TrimSpace(strings.ToLower(raw))
-		switch encoding {
-		case "", "identity":
-			continue
-		case "gzip":
-			gzipReader, err := gzip.NewReader(body)
-			if err != nil {
-				_ = body.Close()
-				return nil, fmt.Errorf("failed to create gzip reader: %w", err)
-			}
-			return &compositeReadCloser{
-				Reader: gzipReader,
-				closers: []func() error{
-					gzipReader.Close,
-					func() error { return body.Close() },
-				},
-			}, nil
-		case "deflate":
-			deflateReader := flate.NewReader(body)
-			return &compositeReadCloser{
-				Reader: deflateReader,
-				closers: []func() error{
-					deflateReader.Close,
-					func() error { return body.Close() },
-				},
-			}, nil
-		case "br":
-			return &compositeReadCloser{
-				Reader: brotli.NewReader(body),
-				closers: []func() error{
-					func() error { return body.Close() },
-				},
-			}, nil
-		case "zstd":
-			decoder, err := zstd.NewReader(body)
-			if err != nil {
-				_ = body.Close()
-				return nil, fmt.Errorf("failed to create zstd reader: %w", err)
-			}
-			return &compositeReadCloser{
-				Reader: decoder,
-				closers: []func() error{
-					func() error { decoder.Close(); return nil },
-					func() error { return body.Close() },
-				},
-			}, nil
-		default:
-			continue
-		}
-	}
-	return body, nil
-}
-
 func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string, stream bool, extraBetas []string) {
 	r.Header.Set("Authorization", "Bearer "+apiKey)
 	r.Header.Set("Content-Type", "application/json")
@@ -684,7 +583,7 @@ func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string,
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Arch", "arm64")
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Os", "MacOS")
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Timeout", "60")
-	misc.EnsureHeader(r.Header, ginHeaders, "User-Agent", "claude-cli/1.0.83 (external, cli)")
+	misc.EnsureHeader(r.Header, ginHeaders, "User-Agent", DefaultClaudeUserAgent)
 	r.Header.Set("Connection", "keep-alive")
 	r.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
 	if stream {

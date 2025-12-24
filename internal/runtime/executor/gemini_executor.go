@@ -27,9 +27,6 @@ import (
 )
 
 const (
-	// glEndpoint is the base URL for the Google Generative Language API.
-	glEndpoint = "https://generativelanguage.googleapis.com"
-
 	// glAPIVersion is the API version used for Gemini requests.
 	glAPIVersion = "v1beta"
 )
@@ -312,7 +309,7 @@ func (e *GeminiExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// For CountTokens, we already have the data, so create categorized error directly
 		log.Debugf("gemini executor: error status: %d, body: %s", resp.StatusCode, summarizeErrorBody(resp.Header.Get("Content-Type"), data))
-		return cliproxyexecutor.Response{}, newCategorizedError(resp.StatusCode, string(data), nil)
+		return cliproxyexecutor.Response{}, NewStatusError(resp.StatusCode, string(data), nil)
 	}
 
 	count := gjson.GetBytes(data, "totalTokens").Int()
@@ -436,14 +433,14 @@ func geminiCreds(a *cliproxyauth.Auth) (apiKey, bearer string) {
 }
 
 func resolveGeminiBaseURL(auth *cliproxyauth.Auth) string {
-	base := glEndpoint
+	base := GeminiDefaultBaseURL
 	if auth != nil && auth.Attributes != nil {
 		if custom := strings.TrimSpace(auth.Attributes["base_url"]); custom != "" {
 			base = strings.TrimRight(custom, "/")
 		}
 	}
 	if base == "" {
-		return glEndpoint
+		return GeminiDefaultBaseURL
 	}
 	return base
 }

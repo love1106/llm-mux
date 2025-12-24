@@ -1,7 +1,6 @@
 package executor
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -17,6 +16,7 @@ import (
 	"github.com/nghyane/llm-mux/internal/oauth"
 	"github.com/nghyane/llm-mux/internal/runtime/geminicli"
 	"github.com/nghyane/llm-mux/internal/translator/from_ir"
+	"github.com/nghyane/llm-mux/internal/translator/ir"
 	cliproxyauth "github.com/nghyane/llm-mux/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/nghyane/llm-mux/sdk/cliproxy/executor"
 	sdktranslator "github.com/nghyane/llm-mux/sdk/translator"
@@ -178,6 +178,37 @@ func (e *GeminiCLIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 	return resp, err
 }
 
+// =============================================================================
+// Gemini CLI Stream Processor (implements StreamProcessor interface)
+// =============================================================================
+
+// geminiCLIStreamProcessor processes Gemini CLI SSE stream lines.
+type geminiCLIStreamProcessor struct {
+	cfg       *config.Config
+	from      sdktranslator.Format
+	model     string
+	messageID string
+	state     *GeminiCLIStreamState
+}
+
+// ProcessLine implements StreamProcessor.ProcessLine for Gemini CLI streams.
+func (p *geminiCLIStreamProcessor) ProcessLine(payload []byte) ([][]byte, *ir.Usage, error) {
+	result, err := TranslateGeminiCLIResponseStreamWithUsage(p.cfg, p.from, payload, p.model, p.messageID, p.state)
+	if err != nil {
+		return nil, nil, err
+	}
+	return result.Chunks, result.Usage, nil
+}
+
+// ProcessDone implements StreamProcessor.ProcessDone (no-op for Gemini CLI).
+func (p *geminiCLIStreamProcessor) ProcessDone() ([][]byte, error) {
+	return nil, nil
+}
+
+// =============================================================================
+// ExecuteStream Method - Uses RunSSEStream helper
+// =============================================================================
+
 func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (stream <-chan cliproxyexecutor.StreamChunk, err error) {
 	tokenSource, baseTokenData, err := prepareGeminiCLITokenSource(ctx, e.cfg, auth)
 	if err != nil {
@@ -274,113 +305,26 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 			return nil, err
 		}
 
-		out := make(chan cliproxyexecutor.StreamChunk)
-		stream = out
+		// Success - create stream processor and run SSE stream
+		streamState := &GeminiCLIStreamState{
+			ClaudeState: from_ir.NewClaudeStreamState(),
+		}
+		streamState.ClaudeState.EstimatedInputTokens = estimatedInputTokens
+		messageID := "chatcmpl-" + attemptModel
 
-		go func(resp *http.Response, reqBody []byte, attempt string, inputTokens int64) {
-			defer close(out)
-			defer func() {
-				if errClose := resp.Body.Close(); errClose != nil {
-					log.Errorf("gemini cli executor: close response body error: %v", errClose)
-				}
-			}()
-			if opts.Alt == "" {
-				scanner := bufio.NewScanner(resp.Body)
-				scanner.Buffer(make([]byte, 64*1024), DefaultStreamBufferSize)
-				streamState := &GeminiCLIStreamState{
-					ClaudeState: from_ir.NewClaudeStreamState(),
-				}
-				// Set pre-calculated input tokens for message_start
-				streamState.ClaudeState.EstimatedInputTokens = inputTokens
+		processor := &geminiCLIStreamProcessor{
+			cfg:       e.cfg,
+			from:      from,
+			model:     attemptModel,
+			messageID: messageID,
+			state:     streamState,
+		}
 
-				for scanner.Scan() {
-					// Check context cancellation before processing each line
-					select {
-					case <-ctx.Done():
-						return
-					default:
-					}
-
-					line := scanner.Bytes()
-
-					// Filter usage metadata for all models (aligns with AntigravityExecutor)
-					filteredLine := FilterSSEUsageMetadata(line)
-
-					// Extract JSON payload from SSE line
-					payload := jsonPayload(filteredLine)
-					if payload == nil {
-						continue
-					}
-
-					// Validate JSON to handle malformed SSE data gracefully
-					if !gjson.ValidBytes(payload) {
-						log.Debugf("gemini cli executor: skipping malformed SSE payload")
-						continue
-					}
-
-					messageID := "chatcmpl-" + attempt
-					result, err := TranslateGeminiCLIResponseStreamWithUsage(e.cfg, from, payload, attempt, messageID, streamState)
-					if err != nil {
-						select {
-						case out <- cliproxyexecutor.StreamChunk{Err: err}:
-						case <-ctx.Done():
-						}
-						return
-					}
-					if result.Usage != nil {
-						reporter.publish(ctx, result.Usage)
-					}
-					for _, chunk := range result.Chunks {
-						select {
-						case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
-						case <-ctx.Done():
-							return
-						}
-					}
-				}
-				if errScan := scanner.Err(); errScan != nil {
-					reporter.publishFailure(ctx)
-					select {
-					case out <- cliproxyexecutor.StreamChunk{Err: errScan}:
-					case <-ctx.Done():
-					}
-				}
-				return
-			}
-
-			data, errRead := io.ReadAll(resp.Body)
-			if errRead != nil {
-				reporter.publishFailure(ctx)
-				select {
-				case out <- cliproxyexecutor.StreamChunk{Err: errRead}:
-				case <-ctx.Done():
-				}
-				return
-			}
-			reporter.publish(ctx, extractUsageFromGeminiResponse(data))
-
-			// For non-streaming responses, convert to non-stream and return as single chunk
-			translatedResp, err := TranslateGeminiCLIResponseNonStream(e.cfg, from, data, attempt)
-			if err != nil {
-				select {
-				case out <- cliproxyexecutor.StreamChunk{Err: err}:
-				case <-ctx.Done():
-				}
-				return
-			}
-			if translatedResp != nil {
-				select {
-				case out <- cliproxyexecutor.StreamChunk{Payload: translatedResp}:
-				case <-ctx.Done():
-				}
-			} else {
-				select {
-				case out <- cliproxyexecutor.StreamChunk{Payload: data}:
-				case <-ctx.Done():
-				}
-			}
-		}(httpResp, append([]byte(nil), payload...), attemptModel, estimatedInputTokens)
-
+		stream = RunSSEStream(ctx, httpResp.Body, reporter, processor, StreamConfig{
+			ExecutorName:    "gemini-cli",
+			Preprocessor:    GeminiPreprocessor(),
+			EnsurePublished: true,
+		})
 		return stream, nil
 	}
 
@@ -707,8 +651,8 @@ func deleteJSONField(body []byte, key string) []byte {
 	return updated
 }
 
-func newGeminiStatusErr(statusCode int, body []byte) statusErr {
-	err := statusErr{code: statusCode, msg: string(body)}
+func newGeminiStatusErr(statusCode int, body []byte) StatusError {
+	err := StatusError{code: statusCode, msg: string(body)}
 	if statusCode == http.StatusTooManyRequests {
 		if retryAfter, parseErr := parseRetryDelay(body); parseErr == nil && retryAfter != nil {
 			err.retryAfter = retryAfter
@@ -723,5 +667,5 @@ func wrapTokenError(err error) error {
 		return nil
 	}
 	msg := err.Error()
-	return newCategorizedError(http.StatusUnauthorized, msg, nil)
+	return NewStatusError(http.StatusUnauthorized, msg, nil)
 }

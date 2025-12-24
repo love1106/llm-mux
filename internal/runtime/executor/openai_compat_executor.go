@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/nghyane/llm-mux/internal/config"
 	"github.com/nghyane/llm-mux/internal/util"
@@ -46,7 +45,7 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 
 	baseURL, apiKey := e.resolveCredentials(auth)
 	if baseURL == "" {
-		err = newCategorizedError(http.StatusUnauthorized, "missing provider baseURL", nil)
+		err = NewStatusError(http.StatusUnauthorized, "missing provider baseURL", nil)
 		return
 	}
 
@@ -118,7 +117,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 
 	baseURL, apiKey := e.resolveCredentials(auth)
 	if baseURL == "" {
-		err = newCategorizedError(http.StatusUnauthorized, "missing provider baseURL", nil)
+		err = NewStatusError(http.StatusUnauthorized, "missing provider baseURL", nil)
 		return nil, err
 	}
 	from := opts.SourceFormat
@@ -330,31 +329,4 @@ func (e *OpenAICompatExecutor) overrideModel(payload []byte, model string) []byt
 	}
 	payload, _ = sjson.SetBytes(payload, "model", model)
 	return payload
-}
-
-type statusErr struct {
-	code       int
-	msg        string
-	retryAfter *time.Duration
-	category   cliproxyauth.ErrorCategory
-}
-
-func (e statusErr) Error() string {
-	if e.msg != "" {
-		return e.msg
-	}
-	return fmt.Sprintf("status %d", e.code)
-}
-func (e statusErr) StatusCode() int                      { return e.code }
-func (e statusErr) RetryAfter() *time.Duration           { return e.retryAfter }
-func (e statusErr) Category() cliproxyauth.ErrorCategory { return e.category }
-
-// newCategorizedError creates a statusErr with automatic category classification
-func newCategorizedError(code int, msg string, retryAfter *time.Duration) statusErr {
-	return statusErr{
-		code:       code,
-		msg:        msg,
-		retryAfter: retryAfter,
-		category:   cliproxyauth.CategorizeError(code, msg),
-	}
 }

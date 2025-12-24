@@ -66,7 +66,7 @@ func (e *AIStudioExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth,
 		return resp, err
 	}
 	if wsResp.Status < 200 || wsResp.Status >= 300 {
-		return resp, statusErr{code: wsResp.Status, msg: string(wsResp.Body)}
+		return resp, NewStatusError(wsResp.Status, string(wsResp.Body), nil)
 	}
 	reporter.publish(ctx, extractUsageFromGeminiResponse(wsResp.Body))
 
@@ -118,7 +118,7 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 			body.Write(firstEvent.Payload)
 		}
 		if firstEvent.Type == wsrelay.MessageTypeStreamEnd {
-			return nil, statusErr{code: firstEvent.Status, msg: body.String()}
+			return nil, NewStatusError(firstEvent.Status, body.String(), nil)
 		}
 		for event := range wsStream {
 			if event.Err != nil {
@@ -134,7 +134,7 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 				break
 			}
 		}
-		return nil, statusErr{code: firstEvent.Status, msg: body.String()}
+		return nil, NewStatusError(firstEvent.Status, body.String(), nil)
 	}
 	out := make(chan cliproxyexecutor.StreamChunk)
 	stream = out
@@ -235,7 +235,7 @@ func (e *AIStudioExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.A
 		return cliproxyexecutor.Response{}, err
 	}
 	if resp.Status < 200 || resp.Status >= 300 {
-		return cliproxyexecutor.Response{}, statusErr{code: resp.Status, msg: string(resp.Body)}
+		return cliproxyexecutor.Response{}, NewStatusError(resp.Status, string(resp.Body), nil)
 	}
 	totalTokens := gjson.GetBytes(resp.Body, "totalTokens").Int()
 	if totalTokens <= 0 {
@@ -323,7 +323,7 @@ func (e *AIStudioExecutor) translateRequestWithTokens(req cliproxyexecutor.Reque
 }
 
 func (e *AIStudioExecutor) buildEndpoint(model, action, alt string) string {
-	base := fmt.Sprintf("%s/%s/models/%s:%s", glEndpoint, glAPIVersion, model, action)
+	base := fmt.Sprintf("%s/%s/models/%s:%s", GeminiDefaultBaseURL, glAPIVersion, model, action)
 	if action == "streamGenerateContent" {
 		if alt == "" {
 			return base + "?alt=sse"
