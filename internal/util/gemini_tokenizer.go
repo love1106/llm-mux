@@ -16,6 +16,17 @@ import (
 // This is an approximation based on Gemini's standard image processing.
 const ImageTokenCost = 258
 
+// AudioTokenCostGemini is the estimated token cost for audio content.
+// Gemini processes audio at approximately 25 tokens per second.
+const AudioTokenCostGemini = 300
+
+// VideoTokenCostGemini is the estimated token cost for video content.
+// Video includes both visual frames and audio, estimated at ~2000 tokens base.
+const VideoTokenCostGemini = 2000
+
+// DocTokenCostGemini is the estimated token cost for file references.
+const DocTokenCostGemini = 500
+
 // tokenizerCache caches LocalTokenizer instances by normalized model name.
 // This avoids repeated tokenizer initialization which is expensive.
 var (
@@ -56,6 +67,22 @@ func CountTokensFromIR(model string, req *ir.UnifiedChatRequest) int64 {
 	return CountTiktokenTokens(model, req)
 }
 
+// mediaCounts tracks non-text media elements for token estimation.
+type mediaCounts struct {
+	images int
+	audios int
+	videos int
+	files  int // Files without inline data (URL/ID references)
+}
+
+// total returns the estimated token count for all media.
+func (m mediaCounts) total() int64 {
+	return int64(m.images*ImageTokenCost) +
+		int64(m.audios*AudioTokenCostGemini) +
+		int64(m.videos*VideoTokenCostGemini) +
+		int64(m.files*DocTokenCostGemini)
+}
+
 // countGeminiTokens implements the specific logic for Gemini token counting.
 func countGeminiTokens(model string, req *ir.UnifiedChatRequest) int64 {
 	tok, err := getTokenizer(model)
@@ -63,7 +90,7 @@ func countGeminiTokens(model string, req *ir.UnifiedChatRequest) int64 {
 		return 0
 	}
 
-	contents, imageCount := buildContentsFromIR(req)
+	contents, media := buildContentsFromIR(req)
 
 	// Count message content tokens
 	var contentTokens int64
@@ -87,7 +114,7 @@ func countGeminiTokens(model string, req *ir.UnifiedChatRequest) int64 {
 	// Count tool definition tokens
 	toolTokens := countToolTokensFromIR(tok, req.Tools)
 
-	total := contentTokens + toolTokens + int64(imageCount*ImageTokenCost)
+	total := contentTokens + toolTokens + media.total()
 
 	return total
 }
@@ -170,6 +197,7 @@ func normalizeModel(model string) string {
 //   - Claude models (use tiktoken for accurate counting)
 //   - OpenAI/GPT models (use tiktoken)
 //   - Qwen models (use tiktoken)
+//
 // This ensures models proxied through Gemini infrastructure but using different
 // tokenizers are handled correctly.
 func isGeminiModel(model string) bool {
@@ -198,32 +226,35 @@ func isGeminiModel(model string) bool {
 }
 
 // buildContentsFromIR converts IR messages to genai.Content slice for token counting.
-// Returns the contents and total image count.
-func buildContentsFromIR(req *ir.UnifiedChatRequest) ([]*genai.Content, int) {
+// Returns the contents and media counts for non-text content.
+func buildContentsFromIR(req *ir.UnifiedChatRequest) ([]*genai.Content, mediaCounts) {
 	if req == nil || len(req.Messages) == 0 {
-		return nil, 0
+		return nil, mediaCounts{}
 	}
 
 	contents := make([]*genai.Content, 0, len(req.Messages))
-	totalImages := 0
+	var total mediaCounts
 
 	for i := range req.Messages {
-		content, imageCount := messageToContent(&req.Messages[i])
-		totalImages += imageCount
+		content, media := messageToContent(&req.Messages[i])
+		total.images += media.images
+		total.audios += media.audios
+		total.videos += media.videos
+		total.files += media.files
 		if content != nil {
 			contents = append(contents, content)
 		}
 	}
 
-	return contents, totalImages
+	return contents, total
 }
 
 // messageToContent converts a single IR message to genai.Content.
 // Returns nil if the message has no countable content.
 // Uses pooled slice to reduce allocations.
-func messageToContent(msg *ir.Message) (*genai.Content, int) {
+func messageToContent(msg *ir.Message) (*genai.Content, mediaCounts) {
 	if msg == nil {
-		return nil, 0
+		return nil, mediaCounts{}
 	}
 
 	role := mapRole(msg.Role)
@@ -240,7 +271,7 @@ func messageToContent(msg *ir.Message) (*genai.Content, int) {
 		partsPool.Put(partsPtr)
 	}()
 
-	imageCount := 0
+	var media mediaCounts
 
 	// Process content parts
 	for i := range msg.Content {
@@ -255,22 +286,48 @@ func messageToContent(msg *ir.Message) (*genai.Content, int) {
 			if part.Reasoning != "" {
 				parts = append(parts, genai.NewPartFromText(part.Reasoning))
 			}
+			// ThoughtSignature is binary data, estimate tokens
+			if len(part.ThoughtSignature) > 0 {
+				// Binary signatures are typically compact, estimate ~4 bytes per token
+				parts = append(parts, genai.NewPartFromText(string(part.ThoughtSignature)))
+			}
 
 		case ir.ContentTypeImage:
 			if part.Image != nil {
-				imageCount++
+				media.images++
+			}
+
+		case ir.ContentTypeAudio:
+			if part.Audio != nil {
+				media.audios++
+				// Also count transcript if present
+				if part.Audio.Transcript != "" {
+					parts = append(parts, genai.NewPartFromText(part.Audio.Transcript))
+				}
+			}
+
+		case ir.ContentTypeVideo:
+			if part.Video != nil {
+				media.videos++
 			}
 
 		case ir.ContentTypeToolResult:
 			if part.ToolResult != nil {
 				text := formatFunctionResponse(part.ToolResult.ToolCallID, part.ToolResult.Result)
 				parts = append(parts, genai.NewPartFromText(text))
-				imageCount += len(part.ToolResult.Images)
+				media.images += len(part.ToolResult.Images)
+				// Count files in tool results
+				media.files += len(part.ToolResult.Files)
 			}
 
 		case ir.ContentTypeFile:
-			if part.File != nil && part.File.FileData != "" {
-				parts = append(parts, genai.NewPartFromText(part.File.FileData))
+			if part.File != nil {
+				if part.File.FileData != "" {
+					parts = append(parts, genai.NewPartFromText(part.File.FileData))
+				} else if part.File.FileURL != "" || part.File.FileID != "" {
+					// File reference without inline data
+					media.files++
+				}
 			}
 
 		case ir.ContentTypeExecutableCode:
@@ -290,17 +347,21 @@ func messageToContent(msg *ir.Message) (*genai.Content, int) {
 		tc := &msg.ToolCalls[i]
 		text := formatFunctionCall(tc.Name, tc.Args)
 		parts = append(parts, genai.NewPartFromText(text))
+		// ThoughtSignature in tool calls
+		if len(tc.ThoughtSignature) > 0 {
+			parts = append(parts, genai.NewPartFromText(string(tc.ThoughtSignature)))
+		}
 	}
 
 	if len(parts) == 0 {
-		return nil, imageCount
+		return nil, media
 	}
 
 	// Copy parts to a new slice (pool slice will be recycled)
 	resultParts := make([]*genai.Part, len(parts))
 	copy(resultParts, parts)
 
-	return &genai.Content{Role: role, Parts: resultParts}, imageCount
+	return &genai.Content{Role: role, Parts: resultParts}, media
 }
 
 // countToolTokensFromIR counts tokens from tool definitions.

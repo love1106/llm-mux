@@ -212,6 +212,8 @@ func CountTiktokenTokens(model string, req *ir.UnifiedChatRequest) int64 {
 						hasContentToCount = true
 					}
 					totalTokens += int64(len(part.ToolResult.Images) * ImageTokenCostOpenAI)
+					// Count files in tool results
+					totalTokens += int64(len(part.ToolResult.Files) * DocTokenCost)
 				}
 			}
 		}
@@ -236,6 +238,11 @@ func CountTiktokenTokens(model string, req *ir.UnifiedChatRequest) int64 {
 			} else {
 				sb.WriteString(tc.Args)
 				sb.WriteByte(')')
+				hasContentToCount = true
+			}
+			// ThoughtSignature in tool calls
+			if len(tc.ThoughtSignature) > 0 {
+				sb.Write(tc.ThoughtSignature)
 				hasContentToCount = true
 			}
 		}

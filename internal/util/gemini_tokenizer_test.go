@@ -268,6 +268,118 @@ func TestCountTokensFromIR_LargeToolResult(t *testing.T) {
 	t.Logf("IR with large tool result token count: %d", count)
 }
 
+func TestCountTokensFromIR_WithAudio(t *testing.T) {
+	req := &ir.UnifiedChatRequest{
+		Model: "gemini-1.5-flash",
+		Messages: []ir.Message{
+			{
+				Role: ir.RoleUser,
+				Content: []ir.ContentPart{
+					{Type: ir.ContentTypeText, Text: "Listen to this"},
+					{
+						Type: ir.ContentTypeAudio,
+						Audio: &ir.AudioPart{
+							Data:       "base64audiodata",
+							Format:     "wav",
+							Transcript: "Hello world",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	count := CountTokensFromIR("gemini-1.5-flash", req)
+	// Should include AudioTokenCostGemini (300) + text tokens + transcript tokens
+	if count < AudioTokenCostGemini {
+		t.Errorf("Expected tokens >= %d (audio cost), got %d", AudioTokenCostGemini, count)
+	}
+	t.Logf("IR with audio token count: %d", count)
+}
+
+func TestCountTokensFromIR_WithVideo(t *testing.T) {
+	req := &ir.UnifiedChatRequest{
+		Model: "gemini-1.5-flash",
+		Messages: []ir.Message{
+			{
+				Role: ir.RoleUser,
+				Content: []ir.ContentPart{
+					{Type: ir.ContentTypeText, Text: "Watch this video"},
+					{
+						Type: ir.ContentTypeVideo,
+						Video: &ir.VideoPart{
+							FileURI:  "gs://bucket/video.mp4",
+							MimeType: "video/mp4",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	count := CountTokensFromIR("gemini-1.5-flash", req)
+	// Should include VideoTokenCostGemini (2000) + text tokens
+	if count < VideoTokenCostGemini {
+		t.Errorf("Expected tokens >= %d (video cost), got %d", VideoTokenCostGemini, count)
+	}
+	t.Logf("IR with video token count: %d", count)
+}
+
+func TestCountTokensFromIR_WithThoughtSignature(t *testing.T) {
+	req := &ir.UnifiedChatRequest{
+		Model: "gemini-1.5-flash",
+		Messages: []ir.Message{
+			{
+				Role: ir.RoleAssistant,
+				Content: []ir.ContentPart{
+					{
+						Type:             ir.ContentTypeReasoning,
+						Reasoning:        "Let me think...",
+						ThoughtSignature: []byte("signature-data-here"),
+					},
+				},
+			},
+		},
+	}
+
+	count := CountTokensFromIR("gemini-1.5-flash", req)
+	if count <= 0 {
+		t.Errorf("Expected tokens > 0 for thought signature, got %d", count)
+	}
+	t.Logf("IR with thought signature token count: %d", count)
+}
+
+func TestCountTokensFromIR_ToolResultWithFiles(t *testing.T) {
+	req := &ir.UnifiedChatRequest{
+		Model: "gemini-1.5-flash",
+		Messages: []ir.Message{
+			{
+				Role: ir.RoleUser,
+				Content: []ir.ContentPart{
+					{
+						Type: ir.ContentTypeToolResult,
+						ToolResult: &ir.ToolResultPart{
+							ToolCallID: "file_read_call",
+							Result:     `{"content": "file contents here"}`,
+							Files: []*ir.FilePart{
+								{FileID: "file-123", Filename: "data.csv"},
+								{FileURL: "https://example.com/file.pdf"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	count := CountTokensFromIR("gemini-1.5-flash", req)
+	// Should include 2 * DocTokenCostGemini (1000) + result tokens
+	if count < 2*DocTokenCostGemini {
+		t.Errorf("Expected tokens >= %d (2 files), got %d", 2*DocTokenCostGemini, count)
+	}
+	t.Logf("IR with tool result files token count: %d", count)
+}
+
 // =============================================================================
 // Model Normalization Tests
 // =============================================================================
