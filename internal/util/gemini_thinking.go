@@ -268,3 +268,45 @@ func ConvertThinkingLevelToBudget(body []byte) []byte {
 	}
 	return updated
 }
+
+// ConvertBudgetToThinkingLevel converts thinkingBudget to thinking_level for Gemini 3 models.
+// Gemini 3 uses thinking_level (MINIMAL/LOW/MEDIUM/HIGH) instead of thinkingBudget.
+//
+// Mapping for Gemini 3 Flash (supports all levels):
+//   - budget ≤ 128   → MINIMAL
+//   - budget ≤ 1024  → LOW
+//   - budget ≤ 8192  → MEDIUM
+//   - budget > 8192  → HIGH
+//
+// Mapping for Gemini 3 Pro (no MINIMAL/MEDIUM):
+//   - budget ≤ 1024  → LOW
+//   - budget > 1024  → HIGH
+func ConvertBudgetToThinkingLevel(model string, budget int) string {
+	isFlash := strings.Contains(strings.ToLower(model), "flash")
+
+	switch {
+	case budget <= 128:
+		if isFlash {
+			return "MINIMAL"
+		}
+		return "LOW" // Pro doesn't have MINIMAL
+	case budget <= 1024:
+		return "LOW"
+	case budget <= 8192:
+		if isFlash {
+			return "MEDIUM"
+		}
+		return "HIGH" // Pro doesn't have MEDIUM
+	default:
+		return "HIGH"
+	}
+}
+
+// GetDefaultThinkingLevel returns the default thinking level for a Gemini 3 model.
+// Flash defaults to MEDIUM, Pro defaults to HIGH.
+func GetDefaultThinkingLevel(model string) string {
+	if strings.Contains(strings.ToLower(model), "flash") {
+		return "MEDIUM"
+	}
+	return "HIGH"
+}

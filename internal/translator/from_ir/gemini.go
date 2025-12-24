@@ -153,40 +153,14 @@ func (p *GeminiProvider) applyGenerationConfig(root map[string]any, req *ir.Unif
 				case ir.ReasoningEffortHigh:
 					thinkingLevel = "HIGH"
 				default:
-					thinkingLevel = "MEDIUM"
+					thinkingLevel = util.GetDefaultThinkingLevel(req.Model)
 				}
 			} else if req.Thinking != nil && req.Thinking.ThinkingBudget != nil {
 				// Priority 2: Auto-convert thinkingBudget to thinking_level
-				// Gemini 3 Flash: MINIMAL, LOW, MEDIUM, HIGH
-				// Gemini 3 Pro: LOW, HIGH (no MINIMAL/MEDIUM)
-				budgetVal := int(*req.Thinking.ThinkingBudget)
-				isFlash := strings.Contains(req.Model, "flash")
-
-				switch {
-				case budgetVal <= 128:
-					if isFlash {
-						thinkingLevel = "MINIMAL"
-					} else {
-						thinkingLevel = "LOW" // Pro doesn't have MINIMAL
-					}
-				case budgetVal <= 1024:
-					thinkingLevel = "LOW"
-				case budgetVal <= 8192:
-					if isFlash {
-						thinkingLevel = "MEDIUM"
-					} else {
-						thinkingLevel = "HIGH" // Pro doesn't have MEDIUM
-					}
-				default:
-					thinkingLevel = "HIGH"
-				}
+				thinkingLevel = util.ConvertBudgetToThinkingLevel(req.Model, int(*req.Thinking.ThinkingBudget))
 			} else {
-				// Default: MEDIUM for Flash, HIGH for Pro
-				if strings.Contains(req.Model, "flash") {
-					thinkingLevel = "MEDIUM"
-				} else {
-					thinkingLevel = "HIGH"
-				}
+				// Priority 3: Default based on model type
+				thinkingLevel = util.GetDefaultThinkingLevel(req.Model)
 			}
 
 			tc["thinking_level"] = thinkingLevel
