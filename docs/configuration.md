@@ -49,8 +49,10 @@ tls:
 ```yaml
 gemini-api-key:
   - api-key: "your-key"
-    proxy-url: ""              # Per-key proxy (optional)
-    excluded-models: []        # Models to skip
+    base-url: ""              # Optional: custom endpoint
+    proxy-url: ""             # Per-key proxy
+    headers: {}               # Extra headers
+    excluded-models: []       # Models to skip
 ```
 
 ### Claude
@@ -60,57 +62,46 @@ claude-api-key:
   - api-key: "sk-ant-..."
     base-url: "https://api.anthropic.com"
     proxy-url: ""
+    headers: {}
+    excluded-models: []
+    models:                   # Model aliases
+      - name: "claude-3-opus"
+        alias: "opus"
 ```
 
 ### OpenAI-Compatible Providers
 
-Use for OpenAI, DeepSeek, Groq, Together, or any OpenAI-compatible API:
-
 ```yaml
 openai-compatibility:
-  # OpenAI direct
   - name: "openai"
     base-url: "https://api.openai.com/v1"
+    headers: {}               # Extra headers
     api-key-entries:
       - api-key: "sk-..."
+        proxy-url: ""         # Per-key proxy
     models:
       - name: "gpt-4o"
-      - name: "gpt-4-turbo"
-
-  # DeepSeek
-  - name: "deepseek"
-    base-url: "https://api.deepseek.com/v1"
-    api-key-entries:
-      - api-key: "sk-..."
-    models:
-      - name: "deepseek-chat"
-        alias: "deepseek"
-
-  # Groq
-  - name: "groq"
-    base-url: "https://api.groq.com/openai/v1"
-    api-key-entries:
-      - api-key: "gsk_..."
-    models:
-      - name: "llama-3.3-70b-versatile"
+        alias: ""             # Optional alias
 ```
+
+Examples: OpenAI, DeepSeek (`https://api.deepseek.com/v1`), Groq (`https://api.groq.com/openai/v1`)
 
 > **Legacy**: `codex-api-key` also works for OpenAI keys but `openai-compatibility` is preferred.
 
 ### Vertex-Compatible Providers
 
-For third-party services using Vertex AI-style endpoints (e.g., zenmux.ai):
-
 ```yaml
 vertex-api-key:
   - api-key: "your-api-key"
-    base-url: "https://zenmux.ai/api"
+    base-url: "https://zenmux.ai/api"  # Required
+    proxy-url: ""
+    headers: {}
     models:
       - name: "gemini-2.5-pro"
         alias: "zenmux-gemini"
 ```
 
-> **Note**: For Google Cloud Vertex AI, use `llm-mux --vertex-import /path/to/service-account.json`
+> For Google Cloud Vertex AI, use `llm-mux --vertex-import /path/to/service-account.json`
 
 ---
 
