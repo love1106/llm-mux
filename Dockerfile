@@ -30,7 +30,6 @@ RUN addgroup -g 1000 llm-mux && \
 WORKDIR /llm-mux
 
 COPY --from=builder --chown=llm-mux:llm-mux /build/llm-mux ./
-COPY --chown=llm-mux:llm-mux config.example.yaml ./
 
 USER llm-mux
 ENV TZ=UTC
