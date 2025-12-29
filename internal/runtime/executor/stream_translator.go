@@ -134,8 +134,10 @@ func (t *StreamTranslator) convertEvent(event *ir.UnifiedEvent) ([]byte, error) 
 			idx = t.ctx.ToolCallIndex
 			t.ctx.ToolCallIndex++ // Increment AFTER getting current index
 		} else if event.Type == ir.EventTypeToolCallDelta {
-			// For deltas, use current index without incrementing
-			idx = t.ctx.ToolCallIndex
+			// For deltas, use PREVIOUS index (the tool call we're continuing)
+			if t.ctx.ToolCallIndex > 0 {
+				idx = t.ctx.ToolCallIndex - 1
+			}
 		}
 		return from_ir.ToOpenAIChunk(*event, t.model, t.messageID, idx)
 	case "claude":

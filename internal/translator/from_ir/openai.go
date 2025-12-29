@@ -605,6 +605,11 @@ func ToOpenAIChunkMeta(ev ir.UnifiedEvent, model, mid string, ci int, meta *ir.O
 			}
 			c["delta"] = map[string]any{"role": "assistant", "tool_calls": []any{tm}}
 		}
+	case ir.EventTypeToolCallDelta:
+		if ev.ToolCall != nil {
+			tm := map[string]any{"index": ci, "function": map[string]any{"arguments": ev.ToolCall.Args}}
+			c["delta"] = map[string]any{"tool_calls": []any{tm}}
+		}
 	case ir.EventTypeImage:
 		if ev.Image != nil {
 			c["delta"] = map[string]any{"role": "assistant", "images": []any{map[string]any{"type": "image_url", "image_url": map[string]string{"url": fmt.Sprintf("data:%s;base64,%s", ev.Image.MimeType, ev.Image.Data)}}}}

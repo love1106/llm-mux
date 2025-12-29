@@ -13,6 +13,16 @@ import (
 
 var debugToolCalls = os.Getenv("DEBUG_TOOL_CALLS") == "1"
 
+// ensureToolCallID returns the ID from functionCall or generates one if empty.
+// Gemini API does not guarantee the "id" field in functionCall responses,
+// so we must generate a client-side ID when missing (similar to Google ADK behavior).
+func ensureToolCallID(fc gjson.Result) string {
+	if id := fc.Get("id").String(); id != "" {
+		return id
+	}
+	return ir.GenToolCallID()
+}
+
 func ParseGeminiRequest(rawJSON []byte) (*ir.UnifiedChatRequest, error) {
 	parsed, err := ir.ParseAndValidateJSON(rawJSON)
 	if err != nil {
@@ -256,7 +266,7 @@ func parseGeminiContent(c gjson.Result) ir.Message {
 				args = "{}"
 			}
 			msg.ToolCalls = append(msg.ToolCalls, ir.ToolCall{
-				ID:               fc.Get("id").String(),
+				ID:               ensureToolCallID(fc),
 				Name:             name,
 				Args:             args,
 				ThoughtSignature: ir.ExtractThoughtSignature(part),
@@ -387,7 +397,7 @@ func parseGeminiCandidate(candidate gjson.Result, schemaCtx *ir.ToolSchemaContex
 				if schemaCtx != nil {
 					args = schemaCtx.NormalizeToolCallArgs(name, args)
 				}
-				msg.ToolCalls = append(msg.ToolCalls, ir.ToolCall{ID: fc.Get("id").String(), Name: name, Args: args, ThoughtSignature: ts})
+				msg.ToolCalls = append(msg.ToolCalls, ir.ToolCall{ID: ensureToolCallID(fc), Name: name, Args: args, ThoughtSignature: ts})
 			}
 		} else if ec := part.Get("executableCode"); ec.Exists() {
 			msg.Content = append(msg.Content, ir.ContentPart{
@@ -493,7 +503,7 @@ func ParseGeminiChunkWithContext(rawJSON []byte, schemaCtx *ir.ToolSchemaContext
 			} else if fc := part.Get("functionCall"); fc.Exists() {
 				name := fc.Get("name").String()
 				if name != "" {
-					id := fc.Get("id").String()
+					id := ensureToolCallID(fc)
 					args := fc.Get("args").Raw
 					if args == "" {
 						args = "{}"
@@ -513,6 +523,14 @@ func ParseGeminiChunkWithContext(rawJSON []byte, schemaCtx *ir.ToolSchemaContext
 						ThoughtSignature: ts,
 					})
 					toolCallIndex++
+				} else if pa := fc.Get("partialArgs"); pa.Exists() {
+					// Continuation chunk with only partialArgs (no name) - emit delta
+					// This happens when streaming function call arguments
+					events = append(events, ir.UnifiedEvent{
+						Type:          ir.EventTypeToolCallDelta,
+						ToolCall:      &ir.ToolCall{Args: pa.Raw},
+						ToolCallIndex: toolCallIndex, // Will be adjusted by translator
+					})
 				}
 			} else if ec := part.Get("executableCode"); ec.Exists() {
 				events = append(events, ir.UnifiedEvent{
