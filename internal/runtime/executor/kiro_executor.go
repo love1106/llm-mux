@@ -1,8 +1,3 @@
-/**
- * @file Kiro (Amazon Q) executor implementation
- * @description Optimized executor for Kiro provider with cleaner architecture.
- */
-
 package executor
 
 import (
@@ -223,9 +218,6 @@ func (e *KiroExecutor) handleJSONResponse(body io.ReadCloser, model string) (cli
 
 	messages, usage, err := to_ir.ParseKiroResponse(rawData)
 	if err != nil {
-		// Fallback: try parsing as event stream if JSON parse fails (sometimes Kiro returns stream-like JSON)
-		// But here we just return error or try to handle it.
-		// For now, assume ParseKiroResponse handles valid JSON.
 		return cliproxyexecutor.Response{}, err
 	}
 
@@ -284,7 +276,6 @@ func (e *KiroExecutor) processStream(ctx context.Context, resp *http.Response, m
 	idx := 0
 
 	for scanner.Scan() {
-		// Check context cancellation before processing each event
 		select {
 		case <-ctx.Done():
 			return
@@ -315,8 +306,6 @@ func (e *KiroExecutor) processStream(ctx context.Context, resp *http.Response, m
 		case <-ctx.Done():
 		}
 	}
-	// Note: [DONE] is sent by the handler (openai_handlers.go) when channel closes
-	// Do NOT send it here to avoid duplicate [DONE] markers
 }
 
 func (e *KiroExecutor) CountTokens(ctx context.Context, auth *coreauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {

@@ -27,24 +27,15 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// ClaudeExecutor is a stateless executor for Anthropic Claude over the messages API.
-// If api_key is unavailable on auth, it falls back to legacy via ClientAdapter.
 type ClaudeExecutor struct {
 	cfg *config.Config
 }
 
-// =============================================================================
-// Claude Stream Processors (implements StreamProcessor interface)
-// =============================================================================
-
-// claudeStreamProcessor processes Claude SSE stream lines with translation.
 type claudeStreamProcessor struct {
 	translator *StreamTranslator
 }
 
-// ProcessLine implements StreamProcessor.ProcessLine for Claude streams.
 func (p *claudeStreamProcessor) ProcessLine(line []byte) ([][]byte, *ir.Usage, error) {
-	// Parse Claude chunk to IR events
 	var parserState *ir.ClaudeStreamParserState
 	if p.translator.ctx.ClaudeState != nil {
 		parserState = p.translator.ctx.ClaudeState.ParserState
@@ -64,28 +55,21 @@ func (p *claudeStreamProcessor) ProcessLine(line []byte) ([][]byte, *ir.Usage, e
 	return result.Chunks, result.Usage, nil
 }
 
-// ProcessDone implements StreamProcessor.ProcessDone (no-op for Claude).
 func (p *claudeStreamProcessor) ProcessDone() ([][]byte, error) {
 	return p.translator.Flush(), nil
 }
 
-// claudePassthroughProcessor handles Claude-to-Claude passthrough mode.
-// It extracts usage for tracking but passes through the raw SSE lines.
 type claudePassthroughProcessor struct{}
 
-// ProcessLine implements StreamProcessor.ProcessLine for passthrough mode.
-// Returns nil chunks to trigger PassthroughOnEmpty behavior in RunSSEStream.
 func (p *claudePassthroughProcessor) ProcessLine(line []byte) ([][]byte, *ir.Usage, error) {
-	// Parse to IR and extract usage (no translation needed for passthrough)
 	events, err := to_ir.ParseClaudeChunk(line)
 	if err != nil {
-		return nil, nil, nil // Ignore parse errors in passthrough mode
+		return nil, nil, nil
 	}
 	usage := extractUsageFromEvents(events)
 	return nil, usage, nil
 }
 
-// ProcessDone implements StreamProcessor.ProcessDone (no-op for passthrough).
 func (p *claudePassthroughProcessor) ProcessDone() ([][]byte, error) {
 	return nil, nil
 }
@@ -105,7 +89,6 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 	defer reporter.trackFailure(ctx, &err)
 	from := opts.SourceFormat
-	// Use streaming translation to preserve function calling, except for claude.
 	stream := from.String() != "claude"
 	body, err := TranslateToClaude(e.cfg, from, req.Model, req.Payload, stream, req.Metadata)
 	if err != nil {
@@ -116,7 +99,6 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		body, _ = sjson.SetBytes(body, "model", modelOverride)
 		modelForUpstream = modelOverride
 	}
-	// Inject thinking config based on model suffix for thinking variants
 	body = e.injectThinkingConfig(req.Model, body)
 
 	if !strings.HasPrefix(modelForUpstream, "claude-3-5-haiku") {
@@ -124,10 +106,8 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	}
 	body = applyPayloadConfig(e.cfg, req.Model, body)
 
-	// Ensure max_tokens > thinking.budget_tokens when thinking is enabled
 	body = ensureMaxTokensForThinking(req.Model, body)
 
-	// Extract betas from body and convert to header
 	var extraBetas []string
 	extraBetas, body = extractAndRemoveBetas(body)
 
@@ -179,7 +159,6 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	if stream {
 		lines := bytes.Split(data, []byte("\n"))
 		for _, line := range lines {
-			// Extract usage using IR parser instead of dedicated helper
 			if events, err := to_ir.ParseClaudeChunk(line); err == nil && len(events) > 0 {
 				if u := extractUsageFromEvents(events); u != nil {
 					reporter.publish(ctx, u)
@@ -190,7 +169,6 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		reporter.publish(ctx, extractUsageFromClaudeResponse(data))
 	}
 
-	// Translate response using canonical translator
 	claudeFrom := sdktranslator.FromString("claude")
 	translatedResp, err := TranslateResponseNonStream(e.cfg, claudeFrom, from, data, req.Model)
 	if err != nil {
@@ -199,7 +177,6 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	if translatedResp != nil {
 		resp = cliproxyexecutor.Response{Payload: translatedResp}
 	} else {
-		// Passthrough if no translation needed (claude to claude)
 		resp = cliproxyexecutor.Response{Payload: data}
 	}
 	return resp, nil
@@ -221,18 +198,14 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	if modelOverride := e.resolveUpstreamModel(req.Model, auth); modelOverride != "" {
 		body, _ = sjson.SetBytes(body, "model", modelOverride)
 	}
-	// Inject thinking config based on model suffix for thinking variants
 	body = e.injectThinkingConfig(req.Model, body)
 	body = checkSystemInstructions(body)
 	body = applyPayloadConfig(e.cfg, req.Model, body)
 
-	// Ensure max_tokens > thinking.budget_tokens when thinking is enabled
 	body = ensureMaxTokensForThinking(req.Model, body)
 
-	// Enable streaming for SSE response from Claude API
 	body, _ = sjson.SetBytes(body, "stream", true)
 
-	// Extract betas from body and convert to header
 	var extraBetas []string
 	extraBetas, body = extractAndRemoveBetas(body)
 
@@ -273,17 +246,14 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		return nil, err
 	}
 
-	// Use RunSSEStream with appropriate processor based on source format
 	if from.String() == "claude" {
-		// Claude → Claude passthrough mode
 		processor := &claudePassthroughProcessor{}
 		return RunSSEStream(ctx, decodedBody, reporter, processor, StreamConfig{
 			ExecutorName:       "claude",
-			PassthroughOnEmpty: true, // Forward raw lines when no chunks are returned
+			PassthroughOnEmpty: true,
 		}), nil
 	}
 
-	// For other formats, use translation processor
 	streamCtx := NewStreamContext()
 	translator := NewStreamTranslator(e.cfg, from, from.String(), req.Model, "msg-"+req.Model, streamCtx)
 	processor := &claudeStreamProcessor{
@@ -317,7 +287,6 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 		body = checkSystemInstructions(body)
 	}
 
-	// Extract betas from body and convert to header (for count_tokens too)
 	var extraBetas []string
 	extraBetas, body = extractAndRemoveBetas(body)
 
@@ -402,8 +371,6 @@ func (e *ClaudeExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (
 	return auth, nil
 }
 
-// extractAndRemoveBetas extracts the "betas" array from the body and removes it.
-// Returns the extracted betas as a string slice and the modified body.
 func extractAndRemoveBetas(body []byte) ([]string, []byte) {
 	betasResult := gjson.GetBytes(body, "betas")
 	if !betasResult.Exists() {
@@ -423,9 +390,7 @@ func extractAndRemoveBetas(body []byte) ([]string, []byte) {
 	return betas, body
 }
 
-// injectThinkingConfig adds thinking configuration based on model name suffix
 func (e *ClaudeExecutor) injectThinkingConfig(modelName string, body []byte) []byte {
-	// Only inject if thinking config is not already present
 	if gjson.GetBytes(body, "thinking").Exists() {
 		return body
 	}
@@ -439,7 +404,6 @@ func (e *ClaudeExecutor) injectThinkingConfig(modelName string, body []byte) []b
 	case strings.HasSuffix(modelName, "-thinking-high"):
 		budgetTokens = 24576
 	case strings.HasSuffix(modelName, "-thinking"):
-		// Default thinking without suffix uses medium budget
 		budgetTokens = 8192
 	default:
 		return body
@@ -450,10 +414,6 @@ func (e *ClaudeExecutor) injectThinkingConfig(modelName string, body []byte) []b
 	return body
 }
 
-// ensureMaxTokensForThinking ensures max_tokens > thinking.budget_tokens when thinking is enabled.
-// Anthropic API requires this constraint; violating it returns a 400 error.
-// This function should be called after all thinking configuration is finalized.
-// It looks up the model's MaxCompletionTokens from the registry to use as the cap.
 func ensureMaxTokensForThinking(modelName string, body []byte) []byte {
 	thinkingType := gjson.GetBytes(body, "thinking.type").String()
 	if thinkingType != "enabled" {
@@ -467,13 +427,11 @@ func ensureMaxTokensForThinking(modelName string, body []byte) []byte {
 
 	maxTokens := gjson.GetBytes(body, "max_tokens").Int()
 
-	// Look up the model's max completion tokens from the registry
 	maxCompletionTokens := 0
 	if modelInfo := registry.GetGlobalRegistry().GetModelInfo(modelName); modelInfo != nil {
 		maxCompletionTokens = modelInfo.MaxCompletionTokens
 	}
 
-	// Fall back to budget + buffer if registry lookup fails or returns 0
 	const fallbackBuffer = 4000
 	requiredMaxTokens := budgetTokens + fallbackBuffer
 	if maxCompletionTokens > 0 {
@@ -490,7 +448,6 @@ func (e *ClaudeExecutor) resolveUpstreamModel(alias string, auth *cliproxyauth.A
 	if alias == "" {
 		return ""
 	}
-	// Hardcoded mappings for thinking models to actual Claude model names
 	switch alias {
 	case "claude-opus-4-5-thinking", "claude-opus-4-5-thinking-low", "claude-opus-4-5-thinking-medium", "claude-opus-4-5-thinking-high":
 		return "claude-opus-4-5-20251101"
@@ -589,7 +546,6 @@ func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string,
 		}
 	}
 
-	// Merge extra betas from request body
 	if len(extraBetas) > 0 {
 		existingSet := make(map[string]bool)
 		for _, b := range strings.Split(baseBetas, ",") {
@@ -632,8 +588,6 @@ func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string,
 	util.ApplyCustomHeadersFromAttrs(r, attrs)
 }
 
-// claudeCreds extracts credentials for Claude API.
-// Delegates to the common ExtractCreds function with Claude configuration.
 func claudeCreds(a *cliproxyauth.Auth) (apiKey, baseURL string) {
 	return ExtractCreds(a, ClaudeCredsConfig)
 }

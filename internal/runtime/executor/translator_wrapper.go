@@ -1,10 +1,3 @@
-// Package executor provides request/response translation between API formats.
-//
-// Streaming translation architecture:
-//   - StreamContext (stream_state.go): Unified streaming state
-//   - ChunkBufferStrategy (chunk_buffer.go): Buffering strategies for SSE chunks
-//   - StreamTranslator (stream_translator.go): Unified format conversion with buffering
-//   - This file: Request translation functions
 package executor
 
 import (
@@ -24,7 +17,6 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// Cached format constants - used by executors for TranslateTokenCount
 var (
 	formatOpenAI = sdktranslator.FromString("openai")
 	formatGemini = sdktranslator.FromString("gemini")
@@ -32,12 +24,6 @@ var (
 	formatClaude = sdktranslator.FromString("claude")
 )
 
-// =============================================================================
-// Stream Helpers
-// =============================================================================
-
-// extractUsageFromEvents extracts usage from IR events (typically from Finish event).
-// Returns nil if no usage is found in events.
 func extractUsageFromEvents(events []ir.UnifiedEvent) *ir.Usage {
 	for i := range events {
 		if events[i].Type == ir.EventTypeFinish && events[i].Usage != nil {
@@ -47,33 +33,17 @@ func extractUsageFromEvents(events []ir.UnifiedEvent) *ir.Usage {
 	return nil
 }
 
-// =============================================================================
-// Translation Result Types
-// =============================================================================
-
-// TranslationResult contains the translated payload and estimated token count.
-// This allows callers to get both translation and token counting in a single operation.
 type TranslationResult struct {
 	Payload              []byte                 // Translated payload
 	EstimatedInputTokens int64                  // Pre-calculated input token count (0 if not applicable)
 	IR                   *ir.UnifiedChatRequest // Parsed IR (for advanced use cases)
 }
 
-// StreamTranslationResult contains translated chunks and extracted usage from streaming response.
-// This eliminates duplicate parsing by extracting usage during translation.
 type StreamTranslationResult struct {
 	Chunks [][]byte  // Translated SSE chunks
 	Usage  *ir.Usage // Usage extracted from IR events (nil if not present in this chunk)
 }
 
-// =============================================================================
-// Gemini Translation with Token Counting
-// =============================================================================
-
-// TranslateToGeminiWithTokens converts request to Gemini format and counts tokens.
-// This is the optimized path - translation and token counting share the same IR.
-// Token counting is only performed for Claude source format (where input_tokens is needed).
-// For other formats, EstimatedInputTokens will be 0.
 func TranslateToGeminiWithTokens(cfg *config.Config, from sdktranslator.Format, model string, payload []byte, streaming bool, metadata map[string]any) (*TranslationResult, error) {
 	irReq, err := convertRequestToIR(from, model, payload, metadata)
 	if err != nil {
@@ -90,10 +60,6 @@ func TranslateToGeminiWithTokens(cfg *config.Config, from sdktranslator.Format, 
 		IR:      irReq,
 	}
 
-	// Count tokens for Claude format.
-	// Use appropriate tokenizer based on target model:
-	// - Gemini models: Gemini tokenizer
-	// - Claude models: tiktoken (Claude on Vertex uses Claude's tokenizer)
 	if from.String() == "claude" {
 		result.EstimatedInputTokens = util.CountTokensFromIR(model, irReq)
 	}
@@ -101,10 +67,7 @@ func TranslateToGeminiWithTokens(cfg *config.Config, from sdktranslator.Format, 
 	return result, nil
 }
 
-// TranslateToGeminiCLIWithTokens converts request to Gemini CLI format and counts tokens.
-// Similar to TranslateToGeminiWithTokens but for Gemini CLI/Antigravity format.
 func TranslateToGeminiCLIWithTokens(cfg *config.Config, from sdktranslator.Format, model string, payload []byte, streaming bool, metadata map[string]any) (*TranslationResult, error) {
-	// Early passthrough for gemini formats (except Claude models)
 	fromStr := from.String()
 	isClaudeModel := strings.Contains(model, "claude")
 
@@ -121,12 +84,10 @@ func TranslateToGeminiCLIWithTokens(cfg *config.Config, from sdktranslator.Forma
 		return nil, err
 	}
 
-	// Claude Vertex: Merge fragmented thinking chunks from Gemini SDK history
 	if isClaudeModel && (fromStr == "gemini" || fromStr == "gemini-cli") {
 		irReq.Messages = to_ir.MergeConsecutiveModelThinking(irReq.Messages)
 	}
 
-	// Claude thinking: ensure -thinking models have config, map regular models if user enables thinking
 	if isClaudeModel {
 		if strings.HasSuffix(model, "-thinking") {
 			if irReq.Thinking == nil {
@@ -153,10 +114,6 @@ func TranslateToGeminiCLIWithTokens(cfg *config.Config, from sdktranslator.Forma
 		IR:      irReq,
 	}
 
-	// Count tokens for Claude format.
-	// Use appropriate tokenizer based on target model:
-	// - Gemini models: Gemini tokenizer (request goes to Gemini API)
-	// - Claude models: tiktoken (request goes to Claude on Vertex/Antigravity)
 	if fromStr == "claude" {
 		result.EstimatedInputTokens = util.CountTokensFromIR(model, irReq)
 	}
@@ -164,10 +121,7 @@ func TranslateToGeminiCLIWithTokens(cfg *config.Config, from sdktranslator.Forma
 	return result, nil
 }
 
-// sanitizeUndefinedValues removes "[undefined]" literal strings from JSON payload.
-// Some clients (e.g., Cherry Studio) send these invalid values which cause upstream API errors.
 func sanitizeUndefinedValues(payload []byte) []byte {
-	// Quick check - skip expensive parsing if no "[undefined]" present
 	if !strings.Contains(string(payload), "[undefined]") {
 		return payload
 	}
@@ -192,7 +146,7 @@ func cleanUndefinedRecursive(v any) any {
 		cleaned := make(map[string]any)
 		for k, child := range val {
 			if str, ok := child.(string); ok && str == "[undefined]" {
-				continue // Skip undefined values
+				continue
 			}
 			if cleanedChild := cleanUndefinedRecursive(child); cleanedChild != nil {
 				cleaned[k] = cleanedChild
@@ -218,19 +172,14 @@ func cleanUndefinedRecursive(v any) any {
 	}
 }
 
-// convertRequestToIR converts a request payload to unified format.
-// This is the shared logic used by all translators.
-// Returns error if format is unsupported.
 func convertRequestToIR(from sdktranslator.Format, model string, payload []byte, metadata map[string]any) (*ir.UnifiedChatRequest, error) {
-	// Sanitize payload to remove "[undefined]" values from buggy clients
 	payload = sanitizeUndefinedValues(payload)
 
 	var irReq *ir.UnifiedChatRequest
 	var err error
 
-	// Determine source format and convert to IR
 	switch from.String() {
-	case "openai", "cline", "codex", "openai-response": // OpenAI-compatible formats (auto-detects Chat Completions vs Responses API)
+	case "openai", "cline", "codex", "openai-response":
 		irReq, err = to_ir.ParseOpenAIRequest(payload)
 	case "ollama":
 		irReq, err = to_ir.ParseOllamaRequest(payload)
@@ -246,12 +195,10 @@ func convertRequestToIR(from sdktranslator.Format, model string, payload []byte,
 		return nil, err
 	}
 
-	// Override model if specified
 	if model != "" {
 		irReq.Model = model
 	}
 
-	// Store metadata for provider-specific handling (merge with existing)
 	if metadata != nil {
 		if irReq.Metadata == nil {
 			irReq.Metadata = make(map[string]any)
@@ -261,7 +208,6 @@ func convertRequestToIR(from sdktranslator.Format, model string, payload []byte,
 		}
 	}
 
-	// Apply thinking overrides from metadata if present
 	if metadata != nil {
 		budgetOverride, includeOverride, hasOverride := extractThinkingFromMetadata(metadata)
 		if hasOverride {
@@ -278,14 +224,11 @@ func convertRequestToIR(from sdktranslator.Format, model string, payload []byte,
 		}
 	}
 
-	// Normalize limits based on model registry (single GetModelInfo call)
 	normalizeIRLimits(irReq.Model, irReq)
 
 	return irReq, nil
 }
 
-// normalizeIRLimits clamps thinking budget and maxTokens to model-specific limits.
-// Uses a single GetModelInfo() call for optimal performance.
 func normalizeIRLimits(model string, req *ir.UnifiedChatRequest) {
 	if model == "" {
 		return
@@ -293,24 +236,20 @@ func normalizeIRLimits(model string, req *ir.UnifiedChatRequest) {
 
 	info := registry.GetGlobalRegistry().GetModelInfo(model)
 	if info == nil {
-		return // Unknown model, pass through
+		return
 	}
 
-	// 1. Normalize thinking budget
 	if req.Thinking != nil && req.Thinking.ThinkingBudget != nil && info.Thinking != nil {
 		budget := int(*req.Thinking.ThinkingBudget)
 
-		// Handle dynamic (-1)
 		if budget == -1 && !info.Thinking.DynamicAllowed {
 			budget = (info.Thinking.Min + info.Thinking.Max) / 2
 		}
 
-		// Handle zero
 		if budget == 0 && !info.Thinking.ZeroAllowed {
 			budget = info.Thinking.Min
 		}
 
-		// Clamp to range
 		if budget > 0 {
 			if budget < info.Thinking.Min {
 				budget = info.Thinking.Min
@@ -324,11 +263,10 @@ func normalizeIRLimits(model string, req *ir.UnifiedChatRequest) {
 		req.Thinking.ThinkingBudget = &b
 	}
 
-	// 2. Clamp maxTokens to model output limit
 	if req.MaxTokens != nil {
 		limit := info.OutputTokenLimit
 		if limit == 0 {
-			limit = info.MaxCompletionTokens // fallback for Claude/OpenAI
+			limit = info.MaxCompletionTokens
 		}
 		if limit > 0 && *req.MaxTokens > limit {
 			*req.MaxTokens = limit
@@ -336,9 +274,6 @@ func normalizeIRLimits(model string, req *ir.UnifiedChatRequest) {
 	}
 }
 
-// TranslateToGeminiCLI converts request to Gemini CLI format using canonical IR translator.
-// Note: Antigravity uses the same format as Gemini CLI, so this function works for both.
-// This is a convenience wrapper around TranslateToGeminiCLIWithTokens that discards token count.
 func TranslateToGeminiCLI(cfg *config.Config, from sdktranslator.Format, model string, payload []byte, streaming bool, metadata map[string]any) ([]byte, error) {
 	result, err := TranslateToGeminiCLIWithTokens(cfg, from, model, payload, streaming, metadata)
 	if err != nil {
@@ -347,7 +282,6 @@ func TranslateToGeminiCLI(cfg *config.Config, from sdktranslator.Format, model s
 	return result.Payload, nil
 }
 
-// extractThinkingFromMetadata extracts thinking config overrides from request metadata
 func extractThinkingFromMetadata(metadata map[string]any) (budget *int, include *bool, hasOverride bool) {
 	if metadata == nil {
 		return nil, nil, false
@@ -365,13 +299,11 @@ func extractThinkingFromMetadata(metadata map[string]any) (budget *int, include 
 	return budget, include, hasOverride
 }
 
-// applyPayloadConfigToIR applies YAML payload config rules to the generated JSON
 func applyPayloadConfigToIR(cfg *config.Config, model string, payload []byte) []byte {
 	if cfg == nil || len(payload) == 0 {
 		return payload
 	}
 
-	// Apply default rules (only set if missing)
 	for _, rule := range cfg.Payload.Default {
 		if matchesPayloadRule(rule, model, "gemini") {
 			for path, value := range rule.Params {
@@ -383,7 +315,6 @@ func applyPayloadConfigToIR(cfg *config.Config, model string, payload []byte) []
 		}
 	}
 
-	// Apply override rules (always set)
 	for _, rule := range cfg.Payload.Override {
 		if matchesPayloadRule(rule, model, "gemini") {
 			for path, value := range rule.Params {
@@ -396,7 +327,6 @@ func applyPayloadConfigToIR(cfg *config.Config, model string, payload []byte) []
 	return payload
 }
 
-// matchesPayloadRule checks if a payload rule matches the given model and protocol
 func matchesPayloadRule(rule config.PayloadRule, model, protocol string) bool {
 	for _, m := range rule.Models {
 		if m.Protocol != "" && m.Protocol != protocol {
@@ -409,7 +339,6 @@ func matchesPayloadRule(rule config.PayloadRule, model, protocol string) bool {
 	return false
 }
 
-// matchesPattern checks if a model name matches a pattern (supports wildcards)
 func matchesPattern(pattern, name string) bool {
 	if pattern == name {
 		return true
@@ -429,8 +358,6 @@ func matchesPattern(pattern, name string) bool {
 	return false
 }
 
-// TranslateToCodex converts request to OpenAI Responses API format (Codex).
-// metadata contains additional context like thinking overrides from request metadata.
 func TranslateToCodex(cfg *config.Config, from sdktranslator.Format, model string, payload []byte, streaming bool, metadata map[string]any) ([]byte, error) {
 	irReq, err := convertRequestToIR(from, model, payload, metadata)
 	if err != nil {
@@ -439,11 +366,7 @@ func TranslateToCodex(cfg *config.Config, from sdktranslator.Format, model strin
 	return from_ir.ToOpenAIRequestFmt(irReq, from_ir.FormatResponsesAPI)
 }
 
-// TranslateToClaude converts request to Claude API format.
 func TranslateToClaude(cfg *config.Config, from sdktranslator.Format, model string, payload []byte, streaming bool, metadata map[string]any) ([]byte, error) {
-	// Note: We always parse to IR even for "claude" format to enable thinking block injection
-	// for history turns that may have been stripped by the client.
-
 	irReq, err := convertRequestToIR(from, model, payload, metadata)
 	if err != nil {
 		return nil, err
@@ -451,8 +374,6 @@ func TranslateToClaude(cfg *config.Config, from sdktranslator.Format, model stri
 	return (&from_ir.ClaudeProvider{}).ConvertRequest(irReq)
 }
 
-// TranslateToClaudeForAntigravity converts request to Claude API format wrapped for Antigravity.
-// Antigravity routes Claude models to Claude Vertex API which uses native Claude format.
 func TranslateToClaudeForAntigravity(cfg *config.Config, from sdktranslator.Format, model string, payload []byte, streaming bool, metadata map[string]any) ([]byte, error) {
 	irReq, err := convertRequestToIR(from, model, payload, metadata)
 	if err != nil {
@@ -464,15 +385,11 @@ func TranslateToClaudeForAntigravity(cfg *config.Config, from sdktranslator.Form
 		return nil, err
 	}
 
-	// Wrap in Antigravity envelope: {"request": <claude_request>}
 	result, _ := sjson.SetRawBytes([]byte(`{}`), "request", claudeJSON)
 	return result, nil
 }
 
-// TranslateToOpenAI converts request to OpenAI Chat Completions API format.
-// metadata contains additional context like thinking overrides from request metadata.
 func TranslateToOpenAI(cfg *config.Config, from sdktranslator.Format, model string, payload []byte, streaming bool, metadata map[string]any) ([]byte, error) {
-	// Early passthrough for openai formats - preserves native OpenAI request structure
 	fromStr := from.String()
 	if fromStr == "openai" || fromStr == "cline" {
 		return applyPayloadConfigToIR(cfg, model, payload), nil
@@ -489,9 +406,6 @@ func TranslateToOpenAI(cfg *config.Config, from sdktranslator.Format, model stri
 	return applyPayloadConfigToIR(cfg, model, openaiJSON), nil
 }
 
-// TranslateToGemini converts request to Gemini (AI Studio API) format.
-// metadata contains additional context like thinking overrides from request metadata.
-// This is a convenience wrapper around TranslateToGeminiWithTokens that discards token count.
 func TranslateToGemini(cfg *config.Config, from sdktranslator.Format, model string, payload []byte, streaming bool, metadata map[string]any) ([]byte, error) {
 	result, err := TranslateToGeminiWithTokens(cfg, from, model, payload, streaming, metadata)
 	if err != nil {
@@ -500,18 +414,11 @@ func TranslateToGemini(cfg *config.Config, from sdktranslator.Format, model stri
 	return result.Payload, nil
 }
 
-// hasMultipleCandidates checks if response has more than one candidate.
-// Uses gjson's efficient array traversal - stops after finding 2nd element.
 func hasMultipleCandidates(response []byte) bool {
-	// Unwrap Antigravity envelope (zero-copy)
 	parsed, _ := ir.UnwrapAntigravityEnvelope(response)
-	// Check if candidates.1 exists (0-indexed, so .1 means 2nd element)
 	return parsed.Get("candidates.1").Exists()
 }
 
-// TranslateTokenCount converts token count response to target format.
-// This delegates to sdktranslator.TranslateTokenCount since token count
-// translation doesn't require IR-based conversion.
 func TranslateTokenCount(ctx context.Context, to, from sdktranslator.Format, count int64, usageJSON []byte) string {
 	return sdktranslator.TranslateTokenCount(ctx, to, from, count, usageJSON)
 }

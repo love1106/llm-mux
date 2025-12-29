@@ -18,23 +18,17 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// OpenAICompatExecutor implements a stateless executor for OpenAI-compatible providers.
-// It performs request/response translation and executes against the provider base URL
-// using per-auth credentials (API key) and per-auth HTTP transport (proxy) from context.
 type OpenAICompatExecutor struct {
 	provider string
 	cfg      *config.Config
 }
 
-// NewOpenAICompatExecutor creates an executor bound to a provider key (e.g., "openrouter").
 func NewOpenAICompatExecutor(provider string, cfg *config.Config) *OpenAICompatExecutor {
 	return &OpenAICompatExecutor{provider: provider, cfg: cfg}
 }
 
-// Identifier implements cliproxyauth.ProviderExecutor.
 func (e *OpenAICompatExecutor) Identifier() string { return e.provider }
 
-// PrepareRequest is a no-op for now (credentials are added via headers at execution time).
 func (e *OpenAICompatExecutor) PrepareRequest(_ *http.Request, _ *cliproxyauth.Auth) error {
 	return nil
 }
@@ -49,7 +43,6 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 		return
 	}
 
-	// Translate inbound request to OpenAI format
 	from := opts.SourceFormat
 	translated, err := TranslateToOpenAI(e.cfg, from, req.Model, req.Payload, opts.Stream, nil)
 	if err != nil {
@@ -98,10 +91,8 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 		return resp, err
 	}
 	reporter.publish(ctx, extractUsageFromOpenAIResponse(body))
-	// Ensure we at least record the request even if upstream doesn't return usage
 	reporter.ensurePublished(ctx)
 
-	// Translate response back to source format
 	fromOpenAI := sdktranslator.FromString("openai")
 	translatedResp, err := TranslateResponseNonStream(e.cfg, fromOpenAI, from, body, req.Model)
 	if err != nil {
@@ -110,7 +101,7 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	if translatedResp != nil {
 		resp = cliproxyexecutor.Response{Payload: translatedResp}
 	} else {
-		resp = cliproxyexecutor.Response{Payload: body} // passthrough
+		resp = cliproxyexecutor.Response{Payload: body}
 	}
 	return resp, nil
 }
@@ -204,7 +195,6 @@ func (e *OpenAICompatExecutor) CountTokens(ctx context.Context, auth *cliproxyau
 	return cliproxyexecutor.Response{Payload: []byte(translatedUsage)}, nil
 }
 
-// Refresh is a no-op for API-key based compatibility providers.
 func (e *OpenAICompatExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
 	_ = ctx
 	return auth, nil

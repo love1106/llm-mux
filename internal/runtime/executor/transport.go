@@ -1,4 +1,3 @@
-// Package executor provides HTTP transport configuration for high-performance scenarios.
 package executor
 
 import (
@@ -11,8 +10,6 @@ import (
 	"time"
 )
 
-// TransportConfig contains tuned settings for high-performance HTTP transport.
-// These values are optimized for API gateway workloads with many concurrent connections.
 var TransportConfig = struct {
 	MaxIdleConns          int
 	MaxIdleConnsPerHost   int
@@ -25,7 +22,7 @@ var TransportConfig = struct {
 	KeepAlive             time.Duration
 }{
 	MaxIdleConns:          1000,
-	MaxIdleConnsPerHost:   100, // Default is 2, too low for API gateways
+	MaxIdleConnsPerHost:   100,
 	MaxConnsPerHost:       200,
 	IdleConnTimeout:       90 * time.Second,
 	TLSHandshakeTimeout:   10 * time.Second,
@@ -35,18 +32,16 @@ var TransportConfig = struct {
 	KeepAlive:             30 * time.Second,
 }
 
-// configureHTTP2 configures HTTP/2 settings for the transport.
 func configureHTTP2(transport *http.Transport) {
 	h2Transport, err := http2.ConfigureTransports(transport)
 	if err != nil {
-		return // fallback to default HTTP/2
+		return
 	}
 	h2Transport.ReadIdleTimeout = 30 * time.Second
 	h2Transport.PingTimeout = 15 * time.Second
 	h2Transport.StrictMaxConcurrentStreams = true
 }
 
-// newDialer creates a configured net.Dialer for transport connections.
 func newDialer() *net.Dialer {
 	return &net.Dialer{
 		Timeout:   TransportConfig.DialTimeout,
@@ -54,7 +49,6 @@ func newDialer() *net.Dialer {
 	}
 }
 
-// baseTransport creates a base HTTP transport with common configuration.
 func baseTransport() *http.Transport {
 	t := &http.Transport{
 		MaxIdleConns:          TransportConfig.MaxIdleConns,
@@ -74,22 +68,18 @@ func baseTransport() *http.Transport {
 	return t
 }
 
-// SharedTransport is the default HTTP transport for direct connections.
-// Used when no proxy is configured and no context RoundTripper is provided.
 var SharedTransport = baseTransport()
 
 func init() {
 	SharedTransport.DialContext = newDialer().DialContext
 }
 
-// ProxyTransport creates an HTTP transport with proxy configuration.
 func ProxyTransport(proxyURL *url.URL) *http.Transport {
 	t := baseTransport()
 	t.Proxy = http.ProxyURL(proxyURL)
 	return t
 }
 
-// SOCKS5Transport creates an HTTP transport with SOCKS5 dialer.
 func SOCKS5Transport(dialFunc func(network, addr string) (net.Conn, error)) *http.Transport {
 	t := baseTransport()
 	t.DialContext = func(_ context.Context, network, addr string) (net.Conn, error) {

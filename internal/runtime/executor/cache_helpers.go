@@ -16,7 +16,6 @@ var (
 	codexCacheOnce sync.Once
 )
 
-// initCodexCacheCleanup starts a background goroutine to periodically clean up expired cache entries.
 func initCodexCacheCleanup() {
 	codexCacheOnce.Do(func() {
 		go func() {
@@ -29,7 +28,6 @@ func initCodexCacheCleanup() {
 	})
 }
 
-// cleanupExpiredCodexCache removes expired entries from the cache.
 func cleanupExpiredCodexCache() {
 	now := time.Now()
 	codexCacheMu.Lock()
@@ -41,7 +39,6 @@ func cleanupExpiredCodexCache() {
 	}
 }
 
-// getCodexCache retrieves a cache entry if it exists and is not expired.
 func getCodexCache(key string) (codexCache, bool) {
 	initCodexCacheCleanup()
 	codexCacheMu.RLock()
@@ -53,7 +50,6 @@ func getCodexCache(key string) (codexCache, bool) {
 	return c, true
 }
 
-// setCodexCache stores a cache entry.
 func setCodexCache(key string, c codexCache) {
 	initCodexCacheCleanup()
 	codexCacheMu.Lock()

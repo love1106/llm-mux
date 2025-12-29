@@ -44,7 +44,6 @@ func newUsageReporter(ctx context.Context, provider, model string, auth *cliprox
 	return reporter
 }
 
-// publish publishes usage from IR Usage struct (optimized path - no duplicate parsing).
 func (r *usageReporter) publish(ctx context.Context, u *ir.Usage) {
 	r.publishWithOutcome(ctx, u, false)
 }
@@ -58,26 +57,22 @@ func (r *usageReporter) trackFailure(ctx context.Context, errPtr *error) {
 		return
 	}
 	if *errPtr != nil {
-		// Don't count user errors (400 Bad Request) as failures
 		if !isUserError(*errPtr) {
 			r.publishFailure(ctx)
 		}
 	}
 }
 
-// isUserError checks if the error is a user error (400 Bad Request) that should not be counted as failure.
 func isUserError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Check if error implements StatusCode() method
 	type statusCoder interface {
 		StatusCode() int
 	}
 	if sc, ok := err.(statusCoder); ok {
 		return sc.StatusCode() == 400
 	}
-	// Check if error implements Category() method
 	type categorizer interface {
 		Category() cliproxyauth.ErrorCategory
 	}
@@ -91,7 +86,6 @@ func (r *usageReporter) publishWithOutcome(ctx context.Context, u *ir.Usage, fai
 	if r == nil {
 		return
 	}
-	// Skip empty usage records unless it's a failure
 	if u == nil && !failed {
 		return
 	}
@@ -113,10 +107,6 @@ func (r *usageReporter) publishWithOutcome(ctx context.Context, u *ir.Usage, fai
 	})
 }
 
-// ensurePublished guarantees that a usage record is emitted exactly once.
-// It is safe to call multiple times; only the first call wins due to once.Do.
-// This is used to ensure request counting even when upstream responses do not
-// include any usage fields (tokens), especially for streaming paths.
 func (r *usageReporter) ensurePublished(ctx context.Context) {
 	if r == nil {
 		return
@@ -201,18 +191,6 @@ func resolveUsageSource(auth *cliproxyauth.Auth, ctxAPIKey string) string {
 	return ""
 }
 
-// =============================================================================
-// Usage Parsing Functions - Return *ir.Usage for unified tracking
-// =============================================================================
-
-// parseGeminiUsageMetadata is a shared helper for Gemini/Antigravity usage parsing.
-// =============================================================================
-// Optimized Usage Extraction from Translated Responses
-// These functions extract usage directly from translator IR parsing
-// instead of duplicating JSON parsing from raw responses.
-// =============================================================================
-
-// extractUsageFromClaudeResponse extracts usage from Claude response using IR parser.
 func extractUsageFromClaudeResponse(data []byte) *ir.Usage {
 	_, usage, err := to_ir.ParseClaudeResponse(data)
 	if err != nil {
@@ -221,7 +199,6 @@ func extractUsageFromClaudeResponse(data []byte) *ir.Usage {
 	return usage
 }
 
-// extractUsageFromOpenAIResponse extracts usage from OpenAI response using IR parser.
 func extractUsageFromOpenAIResponse(data []byte) *ir.Usage {
 	_, usage, err := to_ir.ParseOpenAIResponse(data)
 	if err != nil {
@@ -230,7 +207,6 @@ func extractUsageFromOpenAIResponse(data []byte) *ir.Usage {
 	return usage
 }
 
-// extractUsageFromGeminiResponse extracts usage from Gemini response using IR parser.
 func extractUsageFromGeminiResponse(data []byte) *ir.Usage {
 	_, _, usage, err := to_ir.ParseGeminiResponse(data)
 	if err != nil {
@@ -269,9 +245,6 @@ func rememberStopWithoutUsage(traceID string) {
 	stopChunkMutex.Unlock()
 }
 
-// FilterSSEUsageMetadata removes usageMetadata from SSE events that are not
-// terminal (finishReason != "stop"). Stop chunks are left untouched. This
-// function is shared between aistudio and antigravity executors.
 func FilterSSEUsageMetadata(payload []byte) []byte {
 	if len(payload) == 0 {
 		return payload
@@ -295,7 +268,6 @@ func FilterSSEUsageMetadata(payload []byte) []byte {
 			continue
 		}
 		rawJSON := bytes.TrimSpace(line[dataIdx+5:])
-		// Skip data payloads that are empty or whitespace-only
 		if len(rawJSON) == 0 {
 			outputLines = append(outputLines, line)
 			continue
@@ -338,7 +310,6 @@ func FilterSSEUsageMetadata(payload []byte) []byte {
 	}
 	if !modified {
 		if !foundData {
-			// Handle payloads that are raw JSON without SSE data: prefix.
 			trimmed := bytes.TrimSpace(payload)
 			cleaned, changed := StripUsageMetadataFromJSON(trimmed)
 			if !changed {
@@ -351,41 +322,31 @@ func FilterSSEUsageMetadata(payload []byte) []byte {
 	return bytes.Join(outputLines, []byte("\n"))
 }
 
-// StripUsageMetadataFromJSON drops usageMetadata unless finishReason is present (terminal).
-// It handles both formats:
-// - Aistudio: candidates.0.finishReason
-// - Antigravity: response.candidates.0.finishReason
 func StripUsageMetadataFromJSON(rawJSON []byte) ([]byte, bool) {
 	jsonBytes := bytes.TrimSpace(rawJSON)
 	if len(jsonBytes) == 0 || !gjson.ValidBytes(jsonBytes) {
 		return rawJSON, false
 	}
 
-	// Parse once, reuse result (performance optimization)
 	parsed := gjson.ParseBytes(jsonBytes)
 
-	// Check for finishReason in both aistudio and antigravity formats
 	finishReason := parsed.Get("candidates.0.finishReason")
 	if !finishReason.Exists() {
 		finishReason = parsed.Get("response.candidates.0.finishReason")
 	}
 	terminalReason := finishReason.Exists() && strings.TrimSpace(finishReason.String()) != ""
 
-	// Terminal chunk: keep as-is.
 	if terminalReason {
 		return rawJSON, false
 	}
 
-	// Check if usageMetadata exists
 	hasUsage := parsed.Get("usageMetadata").Exists()
 	hasResponseUsage := parsed.Get("response.usageMetadata").Exists()
 
-	// Nothing to strip
 	if !hasUsage && !hasResponseUsage {
 		return rawJSON, false
 	}
 
-	// Remove usageMetadata from both possible locations
 	cleaned := jsonBytes
 	var changed bool
 
@@ -406,7 +367,6 @@ func hasUsageMetadata(jsonBytes []byte) bool {
 	if len(jsonBytes) == 0 || !gjson.ValidBytes(jsonBytes) {
 		return false
 	}
-	// Parse once, check both paths
 	parsed := gjson.ParseBytes(jsonBytes)
 	return parsed.Get("usageMetadata").Exists() || parsed.Get("response.usageMetadata").Exists()
 }
@@ -415,7 +375,6 @@ func isStopChunkWithoutUsage(jsonBytes []byte) bool {
 	if len(jsonBytes) == 0 || !gjson.ValidBytes(jsonBytes) {
 		return false
 	}
-	// Parse once, reuse for all checks (performance optimization)
 	parsed := gjson.ParseBytes(jsonBytes)
 
 	finishReason := parsed.Get("candidates.0.finishReason")
@@ -426,7 +385,6 @@ func isStopChunkWithoutUsage(jsonBytes []byte) bool {
 	if !finishReason.Exists() || trimmed == "" {
 		return false
 	}
-	// Check for usageMetadata using parsed result
 	return !parsed.Get("usageMetadata").Exists() && !parsed.Get("response.usageMetadata").Exists()
 }
 

@@ -8,16 +8,10 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// applyPayloadConfig applies payload default and override rules from configuration
-// to the given JSON payload for the specified model.
-// Defaults only fill missing fields, while overrides always overwrite existing values.
 func applyPayloadConfig(cfg *config.Config, model string, payload []byte) []byte {
 	return applyPayloadConfigWithRoot(cfg, model, "", "", payload)
 }
 
-// applyPayloadConfigWithRoot behaves like applyPayloadConfig but treats all parameter
-// paths as relative to the provided root path (for example, "request" for Gemini CLI)
-// and restricts matches to the given protocol when supplied.
 func applyPayloadConfigWithRoot(cfg *config.Config, model, protocol, root string, payload []byte) []byte {
 	if cfg == nil || len(payload) == 0 {
 		return payload
@@ -31,7 +25,7 @@ func applyPayloadConfigWithRoot(cfg *config.Config, model, protocol, root string
 		return payload
 	}
 	out := payload
-	// Apply default rules: first write wins per field across all matching rules.
+
 	for i := range rules.Default {
 		rule := &rules.Default[i]
 		if !payloadRuleMatchesModel(rule, model, protocol) {
@@ -52,7 +46,7 @@ func applyPayloadConfigWithRoot(cfg *config.Config, model, protocol, root string
 			out = updated
 		}
 	}
-	// Apply override rules: last write wins per field across all matching rules.
+
 	for i := range rules.Override {
 		rule := &rules.Override[i]
 		if !payloadRuleMatchesModel(rule, model, protocol) {
@@ -95,9 +89,6 @@ func payloadRuleMatchesModel(rule *config.PayloadRule, model, protocol string) b
 	return false
 }
 
-// buildPayloadPath combines an optional root path with a relative parameter path.
-// When root is empty, the parameter path is used as-is. When root is non-empty,
-// the parameter path is treated as relative to root.
 func buildPayloadPath(root, path string) string {
 	r := strings.TrimSpace(root)
 	p := strings.TrimSpace(path)
@@ -111,12 +102,6 @@ func buildPayloadPath(root, path string) string {
 	return r + "." + p
 }
 
-// matchModelPattern performs simple wildcard matching where '*' matches zero or more characters.
-// Examples:
-//
-//	"*-5" matches "gpt-5"
-//	"gpt-*" matches "gpt-5" and "gpt-4"
-//	"gemini-*-pro" matches "gemini-2.5-pro" and "gemini-3-pro".
 func matchModelPattern(pattern, model string) bool {
 	pattern = strings.TrimSpace(pattern)
 	model = strings.TrimSpace(model)
@@ -126,7 +111,7 @@ func matchModelPattern(pattern, model string) bool {
 	if pattern == "*" {
 		return true
 	}
-	// Iterative glob-style matcher supporting only '*' wildcard.
+
 	pi, si := 0, 0
 	starIdx := -1
 	matchIdx := 0

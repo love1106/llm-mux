@@ -1,40 +1,3 @@
-// Package executor provides retry logic for multi-target execution with fallback.
-//
-// Retry Handling:
-//
-// This file provides two layers of retry logic:
-//
-//  1. RetryHandler (new): Modern abstraction for multi-target execution
-//     - Configurable retry status codes (default: 429)
-//     - Configurable fallback codes (default: 429, 503)
-//     - Exponential backoff with server-provided delay hints
-//     - Multi-target fallback support
-//
-//  2. rateLimitRetrier (legacy): Backward-compatible retry for rate limits
-//     - Used by older executor implementations
-//     - 1 retry with exponential backoff
-//
-// RetryAction flow:
-//
-//	RetryActionSuccess      -> Request succeeded, return response
-//	RetryActionRetryCurrent -> Wait and retry same target
-//	RetryActionContinueNext -> Skip to next target in pool
-//	RetryActionFail         -> All retries exhausted, return error
-//
-// Usage:
-//
-//	handler := NewRetryHandler(DefaultRetryConfig())
-//	action, err := handler.HandleResponse(ctx, resp.StatusCode, body, hasNextTarget)
-//	switch action {
-//	case RetryActionSuccess:
-//	    return resp, nil
-//	case RetryActionRetryCurrent:
-//	    continue // retry loop
-//	case RetryActionContinueNext:
-//	    break // outer loop to next target
-//	case RetryActionFail:
-//	    return nil, err
-//	}
 package executor
 
 import (
@@ -48,37 +11,32 @@ import (
 )
 
 const (
-	// Rate limit retry settings: 1 retry to handle transient glitches, then failover to next provider
 	rateLimitMaxRetries = 1
 )
 
-// RetryConfig defines retry behavior for multi-target execution
 type RetryConfig struct {
-	MaxRetries       int           // Max retries per target (default: 1)
-	BaseDelay        time.Duration // Exponential backoff base (default: 1s)
-	MaxDelay         time.Duration // Cap per-retry delay (default: 20s)
-	RetryStatusCodes []int         // Status codes to retry (default: 429)
-	FallbackCodes    []int         // Codes to fallback to next target (default: 429, 503)
-	RetryOnErrors    bool          // Retry on network errors
+	MaxRetries       int
+	BaseDelay        time.Duration
+	MaxDelay         time.Duration
+	RetryStatusCodes []int
+	FallbackCodes    []int
+	RetryOnErrors    bool
 }
 
-// RetryHandler manages retry logic with multi-target fallback
 type RetryHandler struct {
 	config  RetryConfig
-	retrier rateLimitRetrier // Reuse existing implementation
+	retrier rateLimitRetrier
 }
 
-// RetryAction represents the next action to take
 type RetryAction int
 
 const (
-	RetryActionSuccess      RetryAction = iota // Request succeeded
-	RetryActionContinueNext                    // Fallback to next target
-	RetryActionRetryCurrent                    // Retry current target after delay
-	RetryActionFail                            // All retries exhausted, fail
+	RetryActionSuccess RetryAction = iota
+	RetryActionContinueNext
+	RetryActionRetryCurrent
+	RetryActionFail
 )
 
-// String returns a string representation of the RetryAction
 func (a RetryAction) String() string {
 	switch a {
 	case RetryActionSuccess:
@@ -94,7 +52,6 @@ func (a RetryAction) String() string {
 	}
 }
 
-// DefaultRetryConfig returns sensible defaults for retry behavior
 func DefaultRetryConfig() RetryConfig {
 	return RetryConfig{
 		MaxRetries:       1,
@@ -106,8 +63,6 @@ func DefaultRetryConfig() RetryConfig {
 	}
 }
 
-// AntigravityRetryConfig returns config matching Antigravity behavior
-// Antigravity uses more aggressive retry with longer delays for quota limits
 func AntigravityRetryConfig() RetryConfig {
 	return RetryConfig{
 		MaxRetries:       2,
@@ -119,9 +74,7 @@ func AntigravityRetryConfig() RetryConfig {
 	}
 }
 
-// NewRetryHandler creates a new RetryHandler with the given config
 func NewRetryHandler(cfg RetryConfig) *RetryHandler {
-	// Apply defaults for zero values
 	if cfg.MaxRetries == 0 {
 		cfg.MaxRetries = 1
 	}
@@ -144,25 +97,19 @@ func NewRetryHandler(cfg RetryConfig) *RetryHandler {
 	}
 }
 
-// HandleResponse evaluates an HTTP response and returns the appropriate action.
-// It considers status codes, retry configuration, and whether a fallback target is available.
 func (h *RetryHandler) HandleResponse(ctx context.Context, statusCode int, body []byte, hasNextTarget bool) (RetryAction, error) {
-	// Success case (2xx)
 	if statusCode >= 200 && statusCode < 300 {
 		return RetryActionSuccess, nil
 	}
 
-	// Check if this is a retryable status code
 	isRetryable := h.isRetryableStatus(statusCode)
 	isFallbackCode := h.isFallbackCode(statusCode)
 
-	// If it's a fallback code and we have more targets, continue to next
 	if isFallbackCode && hasNextTarget {
 		log.Debugf("retry_handler: status %d, falling back to next target", statusCode)
 		return RetryActionContinueNext, nil
 	}
 
-	// If it's retryable and we haven't exhausted retries
 	if isRetryable && h.retrier.retryCount < h.config.MaxRetries {
 		delay := h.calculateDelay(body)
 		h.retrier.retryCount++
@@ -178,35 +125,29 @@ func (h *RetryHandler) HandleResponse(ctx context.Context, statusCode int, body 
 		return RetryActionRetryCurrent, nil
 	}
 
-	// If we can fallback to next target (even if not a typical fallback code)
 	if hasNextTarget && isRetryable {
 		log.Debugf("retry_handler: retries exhausted for status %d, trying next target", statusCode)
 		return RetryActionContinueNext, nil
 	}
 
-	// All options exhausted
 	log.Debugf("retry_handler: status %d, no more retries or targets available", statusCode)
 	return RetryActionFail, nil
 }
 
-// HandleError evaluates a network/transport error and returns the appropriate action.
 func (h *RetryHandler) HandleError(ctx context.Context, err error, hasNextTarget bool) (RetryAction, error) {
 	if err == nil {
 		return RetryActionSuccess, nil
 	}
 
-	// Check context cancellation first
 	if ctx.Err() != nil {
 		return RetryActionFail, ctx.Err()
 	}
 
-	// If we have more targets, try next one
 	if hasNextTarget {
 		log.Debugf("retry_handler: error occurred, falling back to next target: %v", err)
 		return RetryActionContinueNext, nil
 	}
 
-	// If configured to retry on errors and haven't exhausted retries
 	if h.config.RetryOnErrors && h.retrier.retryCount < h.config.MaxRetries {
 		delay := h.calculateDelayForError()
 		h.retrier.retryCount++
@@ -225,22 +166,18 @@ func (h *RetryHandler) HandleError(ctx context.Context, err error, hasNextTarget
 	return RetryActionFail, err
 }
 
-// Reset resets the retry counter for a new request cycle
 func (h *RetryHandler) Reset() {
 	h.retrier.retryCount = 0
 }
 
-// RetryCount returns the current retry count
 func (h *RetryHandler) RetryCount() int {
 	return h.retrier.retryCount
 }
 
-// Config returns the current retry configuration
 func (h *RetryHandler) Config() RetryConfig {
 	return h.config
 }
 
-// isRetryableStatus checks if the status code should trigger a retry
 func (h *RetryHandler) isRetryableStatus(statusCode int) bool {
 	for _, code := range h.config.RetryStatusCodes {
 		if statusCode == code {
@@ -250,7 +187,6 @@ func (h *RetryHandler) isRetryableStatus(statusCode int) bool {
 	return false
 }
 
-// isFallbackCode checks if the status code should trigger a fallback to next target
 func (h *RetryHandler) isFallbackCode(statusCode int) bool {
 	for _, code := range h.config.FallbackCodes {
 		if statusCode == code {
@@ -260,28 +196,23 @@ func (h *RetryHandler) isFallbackCode(statusCode int) bool {
 	return false
 }
 
-// calculateDelay calculates delay using server hints or exponential backoff
 func (h *RetryHandler) calculateDelay(body []byte) time.Duration {
-	// Try to use server-provided retry delay
 	if serverDelay, err := parseRetryDelay(body); err == nil && serverDelay != nil {
-		delay := *serverDelay + 500*time.Millisecond // Add buffer
+		delay := *serverDelay + 500*time.Millisecond
 		if delay > h.config.MaxDelay {
 			delay = h.config.MaxDelay
 		}
 		return delay
 	}
 
-	// Fall back to exponential backoff
 	return h.calculateDelayForError()
 }
 
-// calculateDelayForError calculates exponential backoff delay for errors
 func (h *RetryHandler) calculateDelayForError() time.Duration {
 	delay := h.config.BaseDelay * time.Duration(1<<h.retrier.retryCount)
 	if delay > h.config.MaxDelay {
 		delay = h.config.MaxDelay
 	}
-	// Add jitter: random value between 0-25% of the delay
 	if delay > 0 {
 		jitter := time.Duration(rand.Int63n(int64(delay) / 4))
 		delay += jitter
@@ -292,30 +223,23 @@ func (h *RetryHandler) calculateDelayForError() time.Duration {
 	return delay
 }
 
-// rateLimitRetrier handles rate limit (429) errors with exponential backoff retry logic.
 type rateLimitRetrier struct {
 	retryCount int
 }
 
-// rateLimitAction represents the action to take after handling a rate limit error.
 type rateLimitAction int
 
 const (
-	rateLimitActionContinue    rateLimitAction = iota // Continue to next model
-	rateLimitActionRetry                              // Retry same model after delay
-	rateLimitActionMaxExceeded                        // Max retries exceeded, stop
+	rateLimitActionContinue rateLimitAction = iota
+	rateLimitActionRetry
+	rateLimitActionMaxExceeded
 )
 
-// handleRateLimit processes a 429 rate limit error and returns the appropriate action.
-// It handles model fallback first, then applies exponential backoff with retries.
-// Returns the action to take and waits if necessary (respecting context cancellation).
 func (r *rateLimitRetrier) handleRateLimit(ctx context.Context, hasNextModel bool, errorBody []byte) (rateLimitAction, error) {
-	// Try next model first if available
 	if hasNextModel {
 		return rateLimitActionContinue, nil
 	}
 
-	// No more models - apply exponential backoff with retries
 	if r.retryCount >= rateLimitMaxRetries {
 		log.Debug("executor: rate limited, max retries exceeded")
 		return rateLimitActionMaxExceeded, nil
@@ -334,14 +258,9 @@ func (r *rateLimitRetrier) handleRateLimit(ctx context.Context, hasNextModel boo
 	return rateLimitActionRetry, nil
 }
 
-// calculateDelay calculates the delay for rate limit retry with exponential backoff.
-// It first tries to use the server-provided retry delay from the error response,
-// then falls back to exponential backoff: 1s, 2s, 4s, 8s, 16s (capped at 20s).
 func (r *rateLimitRetrier) calculateDelay(errorBody []byte) time.Duration {
-	// First, try to use server-provided retry delay
 	if serverDelay, err := parseRetryDelay(errorBody); err == nil && serverDelay != nil {
 		delay := *serverDelay
-		// Add a small buffer to the server-provided delay
 		delay += 500 * time.Millisecond
 		if delay > RateLimitMaxDelay {
 			delay = RateLimitMaxDelay
@@ -349,7 +268,6 @@ func (r *rateLimitRetrier) calculateDelay(errorBody []byte) time.Duration {
 		return delay
 	}
 
-	// Fall back to exponential backoff: baseDelay * 2^retryCount
 	delay := RateLimitBaseDelay * time.Duration(1<<r.retryCount)
 	if delay > RateLimitMaxDelay {
 		delay = RateLimitMaxDelay
@@ -357,18 +275,10 @@ func (r *rateLimitRetrier) calculateDelay(errorBody []byte) time.Duration {
 	return delay
 }
 
-// parseRetryDelay extracts the retry delay from a Google API 429 error response.
-// The error response contains a RetryInfo.retryDelay field in the format "0.847655010s".
-// Handles both formats:
-//   - Object: {"error": {"details": [...]}}
-//   - Array:  [{"error": {"details": [...]}}]
-//
-// Returns the parsed duration or an error if it cannot be determined.
 func parseRetryDelay(errorBody []byte) (*time.Duration, error) {
-	// Try multiple paths to handle different response formats
 	paths := []string{
-		"error.details",   // Standard: {"error": {"details": [...]}}
-		"0.error.details", // Array wrapped: [{"error": {"details": [...]}]
+		"error.details",
+		"0.error.details",
 	}
 
 	var details gjson.Result
@@ -388,7 +298,6 @@ func parseRetryDelay(errorBody []byte) (*time.Duration, error) {
 		if typeVal == "type.googleapis.com/google.rpc.RetryInfo" {
 			retryDelay := detail.Get("retryDelay").String()
 			if retryDelay != "" {
-				// Parse duration string like "0.847655010s"
 				duration, err := time.ParseDuration(retryDelay)
 				if err != nil {
 					return nil, fmt.Errorf("failed to parse duration: %w", err)
@@ -401,14 +310,6 @@ func parseRetryDelay(errorBody []byte) (*time.Duration, error) {
 	return nil, fmt.Errorf("no RetryInfo found")
 }
 
-// ParseQuotaRetryDelay extracts the full quota reset delay from a Google API 429 error response.
-// Unlike parseRetryDelay which is used for short-term retries (capped at 20s), this function
-// returns the actual quota reset time which can be hours.
-// It checks multiple sources in order of preference:
-//  1. RetryInfo.retryDelay (e.g., "7118.204539195s") - most accurate
-//  2. ErrorInfo.metadata.quotaResetDelay (e.g., "1h58m38.204539195s") - human-readable format
-//
-// Returns nil if no quota delay information is found.
 func ParseQuotaRetryDelay(errorBody []byte) *time.Duration {
 	paths := []string{
 		"error.details",
@@ -432,7 +333,6 @@ func ParseQuotaRetryDelay(errorBody []byte) *time.Duration {
 	for _, detail := range details.Array() {
 		typeVal := detail.Get("@type").String()
 
-		// Prefer RetryInfo.retryDelay (more precise, in seconds)
 		if typeVal == "type.googleapis.com/google.rpc.RetryInfo" {
 			retryDelay := detail.Get("retryDelay").String()
 			if retryDelay != "" {
@@ -442,7 +342,6 @@ func ParseQuotaRetryDelay(errorBody []byte) *time.Duration {
 			}
 		}
 
-		// Fallback to ErrorInfo.metadata.quotaResetDelay
 		if typeVal == "type.googleapis.com/google.rpc.ErrorInfo" {
 			quotaDelay := detail.Get("metadata.quotaResetDelay").String()
 			if quotaDelay != "" {

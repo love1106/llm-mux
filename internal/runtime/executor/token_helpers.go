@@ -12,7 +12,6 @@ import (
 	"github.com/tiktoken-go/tokenizer"
 )
 
-// tokenizerForModel returns a tokenizer codec suitable for an OpenAI-style model id.
 func tokenizerForModel(model string) (tokenizer.Codec, error) {
 	sanitized := strings.ToLower(strings.TrimSpace(model))
 	switch {
@@ -41,7 +40,6 @@ func tokenizerForModel(model string) (tokenizer.Codec, error) {
 	}
 }
 
-// countOpenAIChatTokens approximates prompt tokens for OpenAI chat completions payloads.
 func countOpenAIChatTokens(enc tokenizer.Codec, payload []byte) (int64, error) {
 	if enc == nil {
 		return 0, fmt.Errorf("encoder is nil")
@@ -73,7 +71,6 @@ func countOpenAIChatTokens(enc tokenizer.Codec, payload []byte) (int64, error) {
 	return int64(count), nil
 }
 
-// buildOpenAIUsageJSON returns a minimal usage structure understood by downstream translators.
 func buildOpenAIUsageJSON(count int64) []byte {
 	return []byte(fmt.Sprintf(`{"usage":{"prompt_tokens":%d,"completion_tokens":0,"total_tokens":%d}}`, count, count))
 }
@@ -239,19 +236,6 @@ func addIfNotEmpty(segments *[]string, value string) {
 	}
 }
 
-// CountTokensForOpenAIProvider provides common token counting for OpenAI-compatible providers.
-// It handles translation, model extraction, tokenizer initialization, and response formatting.
-//
-// Parameters:
-//   - ctx: Context for cancellation and translation
-//   - cfg: Config for translation settings
-//   - executorName: Name for error messages (e.g., "qwen executor")
-//   - from: Source format for translation
-//   - model: Model name to use for tokenizer (fallback if not in body)
-//   - payload: Original request payload
-//   - metadata: Optional metadata for translation (can be nil)
-//
-// Returns a Response with translated token count or an error.
 func CountTokensForOpenAIProvider(
 	ctx context.Context,
 	cfg *config.Config,
@@ -266,7 +250,6 @@ func CountTokensForOpenAIProvider(
 		return cliproxyexecutor.Response{}, err
 	}
 
-	// Extract model from body if available, fallback to provided model
 	modelName := gjson.GetBytes(body, "model").String()
 	if strings.TrimSpace(modelName) == "" {
 		modelName = model

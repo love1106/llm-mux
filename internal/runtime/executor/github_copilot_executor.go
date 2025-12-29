@@ -20,7 +20,6 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// GitHubCopilotExecutor handles requests to the GitHub Copilot API.
 type GitHubCopilotExecutor struct {
 	cfg     *config.Config
 	mu      sync.RWMutex
@@ -56,7 +55,6 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 	defer reporter.trackFailure(ctx, &err)
 
 	from := opts.SourceFormat
-	// Translate to OpenAI format (Copilot uses OpenAI-compatible API)
 	body, errTranslate := TranslateToOpenAI(e.cfg, from, req.Model, req.Payload, false, nil)
 	if errTranslate != nil {
 		return resp, errTranslate
@@ -96,7 +94,6 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 		reporter.publish(ctx, detail)
 	}
 
-	// Translate response back from OpenAI format to source format
 	fromOpenAI := sdktranslator.FromString("openai")
 	translatedResp, errTranslate := TranslateResponseNonStream(e.cfg, fromOpenAI, from, data, req.Model)
 	if errTranslate != nil {
@@ -194,7 +191,6 @@ func (e *GitHubCopilotExecutor) ensureAPIToken(ctx context.Context, auth *clipro
 		return "", NewStatusError(http.StatusUnauthorized, "missing github access token", nil)
 	}
 
-	// Check cache first
 	e.mu.RLock()
 	if cached, ok := e.cache[accessToken]; ok && cached.expiresAt.After(time.Now().Add(TokenExpiryBuffer)) {
 		e.mu.RUnlock()
@@ -202,9 +198,7 @@ func (e *GitHubCopilotExecutor) ensureAPIToken(ctx context.Context, auth *clipro
 	}
 	e.mu.RUnlock()
 
-	// Use singleflight to prevent cache stampede: only one goroutine fetches token while others wait
 	result, err, _ := e.sfGroup.Do(accessToken, func() (interface{}, error) {
-		// Check cache again in case another goroutine just filled it
 		e.mu.RLock()
 		if cached, ok := e.cache[accessToken]; ok && cached.expiresAt.After(time.Now().Add(TokenExpiryBuffer)) {
 			e.mu.RUnlock()

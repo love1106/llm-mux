@@ -38,7 +38,6 @@ var geminiOauthScopes = []string{
 	"https://www.googleapis.com/auth/userinfo.profile",
 }
 
-// GeminiCLIExecutor talks to the Cloud Code Assist endpoint using OAuth credentials from auth metadata.
 type GeminiCLIExecutor struct {
 	cfg *config.Config
 }
@@ -61,7 +60,6 @@ func (e *GeminiCLIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 
 	from := opts.SourceFormat
 
-	// Translate request through canonical IR (handles all transformations internally)
 	basePayload, err := TranslateToGeminiCLI(e.cfg, from, req.Model, req.Payload, false, req.Metadata)
 	if err != nil {
 		return resp, fmt.Errorf("failed to translate request: %w", err)
@@ -176,7 +174,6 @@ func (e *GeminiCLIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 				idx--
 				continue
 			}
-			// rateLimitActionMaxExceeded - fall through to error
 		}
 
 		err = newGeminiStatusErr(httpResp.StatusCode, data)
@@ -190,10 +187,6 @@ func (e *GeminiCLIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 	return resp, err
 }
 
-// =============================================================================
-// ExecuteStream Method - Uses RunSSEStream helper
-// =============================================================================
-
 func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (stream <-chan cliproxyexecutor.StreamChunk, err error) {
 	tokenSource, baseTokenData, err := prepareGeminiCLITokenSource(ctx, e.cfg, auth)
 	if err != nil {
@@ -204,7 +197,6 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 
 	from := opts.SourceFormat
 
-	// Translate request and count tokens in one operation (uses shared IR)
 	translation, err := TranslateToGeminiCLIWithTokens(e.cfg, from, req.Model, req.Payload, true, req.Metadata)
 	if err != nil {
 		return nil, fmt.Errorf("failed to translate request: %w", err)
@@ -290,18 +282,16 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 				}
 				switch action {
 				case rateLimitActionContinue:
-					continue // Try next model (idx will increment)
+					continue
 				case rateLimitActionRetry:
-					idx-- // Retry same model (decrement idx to retry current model)
+					idx--
 					continue
 				}
-				// rateLimitActionMaxExceeded - fall through to error
 			}
 			err = newGeminiStatusErr(httpResp.StatusCode, data)
 			return nil, err
 		}
 
-		// Success - create stream processor and run SSE stream
 		streamCtx := NewStreamContext()
 		streamCtx.EstimatedInputTokens = estimatedInputTokens
 		messageID := "chatcmpl-" + attemptModel
@@ -340,14 +330,13 @@ func (e *GeminiCLIExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.
 	var lastBody []byte
 	retrier := &rateLimitRetrier{}
 
-	for idx, attemptModel := range models {
-		// Translate request through canonical IR
+	for idx := 0; idx < len(models); idx++ {
+		attemptModel := models[idx]
 		payload, errTranslate := TranslateToGeminiCLI(e.cfg, from, attemptModel, req.Payload, false, req.Metadata)
 		if errTranslate != nil {
 			return cliproxyexecutor.Response{}, fmt.Errorf("failed to translate request: %w", errTranslate)
 		}
 
-		// Remove fields not needed for countTokens
 		payload = deleteJSONField(payload, "project")
 		payload = deleteJSONField(payload, "model")
 		payload = deleteJSONField(payload, "request.safetySettings")
@@ -416,7 +405,6 @@ func (e *GeminiCLIExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.
 				idx--
 				continue
 			}
-			// rateLimitActionMaxExceeded - fall through to break
 		}
 		break
 	}
@@ -552,12 +540,10 @@ func resolveGeminiProjectID(auth *cliproxyauth.Auth) string {
 	if auth == nil {
 		return ""
 	}
-	// Check if runtime is a VirtualCredential (handles AuthRuntimeData unwrapping via IsVirtual)
 	if geminicli.IsVirtual(auth.Runtime) {
 		if virtual, ok := auth.Runtime.(*geminicli.VirtualCredential); ok && virtual != nil {
 			return strings.TrimSpace(virtual.ProjectID)
 		}
-		// If wrapped in AuthRuntimeData, extract the actual VirtualCredential
 		if rd, ok := auth.Runtime.(*cliproxyauth.AuthRuntimeData); ok && rd != nil {
 			if virtual, ok := rd.ProviderData.(*geminicli.VirtualCredential); ok && virtual != nil {
 				return strings.TrimSpace(virtual.ProjectID)
@@ -609,7 +595,6 @@ func stringValue(m map[string]any, key string) string {
 	return ""
 }
 
-// applyGeminiCLIHeaders sets required headers for the Gemini CLI upstream.
 func applyGeminiCLIHeaders(r *http.Request) {
 	var ginHeaders http.Header
 	if ginCtx, ok := r.Context().Value("gin").(*gin.Context); ok && ginCtx != nil && ginCtx.Request != nil {
@@ -621,13 +606,10 @@ func applyGeminiCLIHeaders(r *http.Request) {
 	misc.EnsureHeader(r.Header, ginHeaders, "Client-Metadata", geminiCLIClientMetadata())
 }
 
-// geminiCLIClientMetadata returns a compact metadata string required by upstream.
 func geminiCLIClientMetadata() string {
-	// Keep parity with CLI client defaults
 	return "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI"
 }
 
-// setJSONField sets a top-level JSON field on a byte slice payload via sjson.
 func setJSONField(body []byte, key, value string) []byte {
 	if key == "" {
 		return body
@@ -639,7 +621,6 @@ func setJSONField(body []byte, key, value string) []byte {
 	return updated
 }
 
-// deleteJSONField removes a top-level key if present (best-effort) via sjson.
 func deleteJSONField(body []byte, key string) []byte {
 	if key == "" || len(body) == 0 {
 		return body
@@ -661,7 +642,6 @@ func newGeminiStatusErr(statusCode int, body []byte) StatusError {
 	return err
 }
 
-// wrapTokenError wraps token retrieval errors with proper categorization
 func wrapTokenError(err error) error {
 	if err == nil {
 		return nil
@@ -670,12 +650,6 @@ func wrapTokenError(err error) error {
 	return NewStatusError(http.StatusUnauthorized, msg, nil)
 }
 
-// =============================================================================
-// Dynamic Model Fetching
-// =============================================================================
-
-// FetchGeminiCLIModels retrieves available models from Cloud Code Assist.
-// Uses OAuth token authentication.
 func FetchGeminiCLIModels(ctx context.Context, auth *cliproxyauth.Auth, cfg *config.Config) []*registry.ModelInfo {
 	tokenSource, _, err := prepareGeminiCLITokenSource(ctx, cfg, auth)
 	if err != nil {

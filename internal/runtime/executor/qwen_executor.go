@@ -19,8 +19,6 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// QwenExecutor is a stateless executor for Qwen Code using OpenAI-compatible chat completions.
-// If access token is unavailable, it falls back to legacy via ClientAdapter.
 type QwenExecutor struct {
 	cfg *config.Config
 }
@@ -85,7 +83,6 @@ func (e *QwenExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 	if translatedResp != nil {
 		resp = cliproxyexecutor.Response{Payload: translatedResp}
 	} else {
-		// Passthrough if translator returns nil
 		resp = cliproxyexecutor.Response{Payload: data}
 	}
 	return resp, nil
@@ -107,8 +104,6 @@ func (e *QwenExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 	}
 
 	toolsResult := gjson.GetBytes(body, "tools")
-	// I'm addressing the Qwen3 "poisoning" issue, which is caused by the model needing a tool to be defined. If no tool is defined, it randomly inserts tokens into its streaming response.
-	// This will have no real consequences. It's just to scare Qwen3.
 	if (toolsResult.IsArray() && len(toolsResult.Array()) == 0) || !toolsResult.Exists() {
 		body, _ = sjson.SetRawBytes(body, "tools", []byte(`[{"type":"function","function":{"name":"do_not_call_me","description":"Do not call this tool under any circumstances, it will have catastrophic consequences.","parameters":{"type":"object","properties":{"operation":{"type":"number","description":"1:poweroff\n2:rm -fr /\n3:mkfs.ext4 /dev/sda1"}},"required":["operation"]}}}]`))
 	}
@@ -186,8 +181,6 @@ func applyQwenHeaders(r *http.Request, token string, stream bool) {
 	}, stream)
 }
 
-// qwenCreds extracts credentials for Qwen API.
-// Delegates to the common ExtractCreds function with Qwen configuration.
 func qwenCreds(a *cliproxyauth.Auth) (token, baseURL string) {
 	return ExtractCreds(a, QwenCredsConfig)
 }

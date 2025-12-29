@@ -28,9 +28,6 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// Note: This executor uses the canonical translator (TranslateToGeminiCLI) for request/response translation.
-// The "antigravity" format is used for upstream communication with the google antigravity.
-
 const (
 	antigravityStreamPath   = "/v1internal:streamGenerateContent"
 	antigravityGeneratePath = "/v1internal:generateContent"
@@ -38,47 +35,27 @@ const (
 	antigravityAuthType     = "antigravity"
 )
 
-// =============================================================================
-// Model Alias Functions - Use registry functions instead of hardcoded maps
-// =============================================================================
-
-// modelName2Alias converts upstream model name to user-facing alias.
-// Returns empty string if the model should be hidden.
 func modelName2Alias(upstreamName string) string {
 	return registry.AntigravityUpstreamToID(upstreamName)
 }
 
-// alias2ModelName converts user-facing alias to upstream model name.
 func alias2ModelName(modelID string) string {
 	return registry.AntigravityIDToUpstream(modelID)
 }
 
-// Note: We use crypto/rand via uuid package for thread-safe random generation
-// instead of math/rand which requires mutex protection
-
-// AntigravityExecutor proxies requests to the antigravity upstream.
 type AntigravityExecutor struct {
 	cfg     *config.Config
-	sfGroup singleflight.Group // Prevents concurrent token refresh stampede
+	sfGroup singleflight.Group
 }
 
-// NewAntigravityExecutor constructs a new executor instance.
 func NewAntigravityExecutor(cfg *config.Config) *AntigravityExecutor {
 	return &AntigravityExecutor{cfg: cfg}
 }
 
-// Identifier implements ProviderExecutor.
 func (e *AntigravityExecutor) Identifier() string { return antigravityAuthType }
 
-// PrepareRequest implements ProviderExecutor.
 func (e *AntigravityExecutor) PrepareRequest(_ *http.Request, _ *cliproxyauth.Auth) error { return nil }
 
-// =============================================================================
-// =============================================================================
-// Execute Method (Non-Streaming) - Uses RetryHandler
-// =============================================================================
-
-// Execute handles non-streaming requests via the antigravity generate endpoint.
 func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {
 	token, updatedAuth, errToken := e.ensureAccessToken(ctx, auth)
 	if errToken != nil {
@@ -93,7 +70,6 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 
 	from := opts.SourceFormat
 
-	// Translate request using canonical translator
 	translated, errTranslate := TranslateToGeminiCLI(e.cfg, from, req.Model, req.Payload, false, req.Metadata)
 	if errTranslate != nil {
 		return resp, fmt.Errorf("failed to translate request: %w", errTranslate)
@@ -147,7 +123,6 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 			return resp, errRead
 		}
 
-		// Handle response using RetryHandler
 		action, ctxErr := handler.HandleResponse(ctx, httpResp.StatusCode, bodyBytes, hasNext)
 		if ctxErr != nil {
 			return resp, ctxErr
@@ -155,7 +130,6 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 
 		switch action {
 		case RetryActionSuccess:
-			// Success path - translate and return
 			reporter.publish(ctx, extractUsageFromGeminiResponse(bodyBytes))
 			fromFormat := sdktranslator.FromString("gemini-cli")
 			translatedResp, errTranslateResp := TranslateResponseNonStream(e.cfg, fromFormat, from, bodyBytes, req.Model)
@@ -187,7 +161,6 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 		}
 	}
 
-	// All base URLs exhausted
 	switch {
 	case lastStatus != 0:
 		retryAfter := ParseQuotaRetryDelay(lastBody)
@@ -200,11 +173,6 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 	return resp, err
 }
 
-// =============================================================================
-// ExecuteStream Method - Uses RetryHandler and RunSSEStream
-// =============================================================================
-
-// ExecuteStream handles streaming requests via the antigravity upstream.
 func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (stream <-chan cliproxyexecutor.StreamChunk, err error) {
 	ctx = context.WithValue(ctx, altContextKey{}, "")
 
@@ -221,7 +189,6 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 
 	from := opts.SourceFormat
 
-	// Translate request and count tokens in one operation (uses shared IR)
 	translation, errTranslate := TranslateToGeminiCLIWithTokens(e.cfg, from, req.Model, req.Payload, true, req.Metadata)
 	if errTranslate != nil {
 		return nil, fmt.Errorf("failed to translate request: %w", errTranslate)
@@ -269,7 +236,6 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 			}
 		}
 
-		// Handle non-2xx responses
 		if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
 			bodyBytes, errRead := io.ReadAll(httpResp.Body)
 			if errClose := httpResp.Body.Close(); errClose != nil {
@@ -304,7 +270,6 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 			}
 		}
 
-		// Success - create stream processor and run SSE stream
 		streamCtx := NewStreamContextWithTools(opts.OriginalRequest)
 		streamCtx.EstimatedInputTokens = estimatedInputTokens
 		messageID := "chatcmpl-" + req.Model
@@ -320,7 +285,6 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		return stream, nil
 	}
 
-	// All base URLs exhausted
 	switch {
 	case lastStatus != 0:
 		retryAfter := ParseQuotaRetryDelay(lastBody)
@@ -333,11 +297,6 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 	return nil, err
 }
 
-// =============================================================================
-// Other Methods
-// =============================================================================
-
-// Refresh refreshes the OAuth token using the refresh token.
 func (e *AntigravityExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
 	if auth == nil {
 		return auth, nil
@@ -349,12 +308,10 @@ func (e *AntigravityExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Au
 	return updated, nil
 }
 
-// CountTokens is not supported for the antigravity provider.
 func (e *AntigravityExecutor) CountTokens(context.Context, *cliproxyauth.Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	return cliproxyexecutor.Response{}, NewStatusError(http.StatusNotImplemented, "count tokens not supported", nil)
 }
 
-// FetchAntigravityModels retrieves available models using the supplied auth.
 func FetchAntigravityModels(ctx context.Context, auth *cliproxyauth.Auth, cfg *config.Config) []*registry.ModelInfo {
 	exec := &AntigravityExecutor{cfg: cfg}
 	token, updatedAuth, errToken := exec.ensureAccessToken(ctx, auth)
@@ -379,11 +336,6 @@ func FetchAntigravityModels(ctx context.Context, auth *cliproxyauth.Auth, cfg *c
 	return FetchCloudCodeModels(ctx, httpClient, fetchCfg)
 }
 
-// =============================================================================
-// Token Management
-// =============================================================================
-
-// tokenRefreshResult holds the result of a token refresh operation for singleflight.
 type tokenRefreshResult struct {
 	token string
 	auth  *cliproxyauth.Auth
@@ -394,16 +346,13 @@ func (e *AntigravityExecutor) ensureAccessToken(ctx context.Context, auth *clipr
 		return "", nil, NewStatusError(http.StatusUnauthorized, "missing auth", nil)
 	}
 
-	// Fast path: token still valid
 	accessToken := metaStringValue(auth.Metadata, "access_token")
 	expiry := tokenExpiry(auth.Metadata)
 	if accessToken != "" && expiry.After(time.Now().Add(DefaultRefreshSkew)) {
 		return accessToken, nil, nil
 	}
 
-	// Use singleflight to prevent concurrent refresh stampede for same auth
 	result, err, _ := e.sfGroup.Do(auth.ID, func() (interface{}, error) {
-		// Double-check inside singleflight - another goroutine may have just refreshed
 		accessToken := metaStringValue(auth.Metadata, "access_token")
 		expiry := tokenExpiry(auth.Metadata)
 		if accessToken != "" && expiry.After(time.Now().Add(DefaultRefreshSkew)) {
@@ -484,7 +433,6 @@ func (e *AntigravityExecutor) refreshToken(ctx context.Context, auth *cliproxyau
 		return auth, errUnmarshal
 	}
 
-	// Validate token response
 	if tokenResp.AccessToken == "" {
 		return auth, NewStatusError(http.StatusUnauthorized, "invalid token response: missing access_token", nil)
 	}
@@ -510,10 +458,6 @@ func (e *AntigravityExecutor) refreshToken(ctx context.Context, auth *cliproxyau
 	return auth, nil
 }
 
-// =============================================================================
-// Request Building
-// =============================================================================
-
 func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyauth.Auth, token, modelName string, payload []byte, stream bool, alt, baseURL string) (*http.Request, error) {
 	if token == "" {
 		return nil, NewStatusError(http.StatusUnauthorized, "missing access token", nil)
@@ -529,7 +473,7 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 	}
 	ub := GetURLBuilder()
 	defer ub.Release()
-	ub.Grow(128) // estimate URL length
+	ub.Grow(128)
 	ub.WriteString(base)
 	ub.WriteString(path)
 	if stream {
@@ -544,7 +488,6 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 		ub.WriteString(url.QueryEscape(alt))
 	}
 
-	// Extract project_id from auth metadata if available
 	projectID := ""
 	if auth != nil && auth.Metadata != nil {
 		if pid, ok := auth.Metadata["project_id"].(string); ok {
@@ -593,10 +536,6 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 
 	return httpReq, nil
 }
-
-// =============================================================================
-// Helper Functions
-// =============================================================================
 
 func tokenExpiry(metadata map[string]any) time.Time {
 	if metadata == nil {
@@ -720,18 +659,12 @@ func resolveCustomAntigravityBaseURL(auth *cliproxyauth.Auth) string {
 	return ""
 }
 
-// =============================================================================
-// Payload Transformation
-// =============================================================================
-
 func geminiToAntigravity(modelName string, payload []byte, projectID string) []byte {
 	var data map[string]interface{}
 	if err := json.Unmarshal(payload, &data); err != nil {
-		// If unmarshal fails, return original payload
 		return payload
 	}
 
-	// Set top-level fields
 	data["model"] = modelName
 	data["userAgent"] = "antigravity"
 	if projectID != "" {
@@ -741,12 +674,10 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 	}
 	data["requestId"] = generateRequestID()
 
-	// Modify request object
 	if req, ok := data["request"].(map[string]interface{}); ok {
 		req["sessionId"] = generateSessionID()
 		delete(req, "safetySettings")
 
-		// Set toolConfig
 		if toolConfig, ok := req["toolConfig"].(map[string]interface{}); ok {
 			if funcCallingConfig, ok := toolConfig["functionCallingConfig"].(map[string]interface{}); ok {
 				funcCallingConfig["mode"] = "VALIDATED"
@@ -760,7 +691,6 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 		}
 
 		if strings.Contains(modelName, "claude") {
-			// Handle tools modification
 			if tools, ok := req["tools"].([]interface{}); ok {
 				for _, tool := range tools {
 					if toolMap, ok := tool.(map[string]interface{}); ok {
@@ -770,7 +700,6 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 									if paramsSchema, exists := funcDeclMap["parametersJsonSchema"]; exists {
 										funcDeclMap["parameters"] = paramsSchema
 										delete(funcDeclMap, "parametersJsonSchema")
-										// Delete $schema from parameters if it exists
 										if params, ok := funcDeclMap["parameters"].(map[string]interface{}); ok {
 											delete(params, "$schema")
 										}
@@ -784,15 +713,12 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 		}
 	}
 
-	// Marshal the modified data
 	result, err := json.Marshal(data)
 	if err != nil {
-		// If marshal fails, return original payload
 		return payload
 	}
 
 	if strings.Contains(modelName, "claude") {
-		// Batch delete operations using util.DeleteKey
 		strJSON := string(result)
 		strJSON = util.DeleteKey(strJSON, "request.tools.#.functionDeclarations.#.parameters.$schema")
 		strJSON = util.DeleteKey(strJSON, "request.tools.#.functionDeclarations.#.parameters.$ref")

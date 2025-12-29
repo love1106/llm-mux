@@ -28,8 +28,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// CodexExecutor is a stateless executor for Codex (OpenAI Responses API entrypoint).
-// If api_key is unavailable on auth, it falls back to legacy via ClientAdapter.
 type CodexExecutor struct {
 	cfg *config.Config
 }
@@ -56,7 +54,6 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	}
 
 	body = e.setReasoningEffortByAlias(req.Model, body)
-
 	body = applyPayloadConfig(e.cfg, req.Model, body)
 
 	body, _ = sjson.SetBytes(body, "stream", true)
@@ -113,7 +110,6 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		if translatedResp != nil {
 			resp = cliproxyexecutor.Response{Payload: translatedResp}
 		} else {
-			// Passthrough if translator returns nil
 			resp = cliproxyexecutor.Response{Payload: line}
 		}
 		return resp, nil
@@ -164,12 +160,10 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		if readErr != nil {
 			return nil, readErr
 		}
-		// Codex uses categorized error for consistency
 		log.Debugf("codex executor: error status: %d, body: %s", httpResp.StatusCode, summarizeErrorBody(httpResp.Header.Get("Content-Type"), data))
 		return nil, NewStatusError(httpResp.StatusCode, string(data), nil)
 	}
 
-	// Create stream processor for Codex
 	messageID := "resp-" + req.Model
 	streamCtx := NewStreamContext()
 	translator := NewStreamTranslator(e.cfg, from, from.String(), req.Model, messageID, streamCtx)
@@ -177,21 +171,17 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		translator: translator,
 	}
 
-	// Use RunSSEStream for unified streaming with buffer pooling
 	return RunSSEStream(ctx, httpResp.Body, reporter, processor, StreamConfig{
 		ExecutorName:   "codex",
 		SkipEmptyLines: true,
 	}), nil
 }
 
-// codexStreamProcessor implements StreamProcessor for Codex SSE streams.
 type codexStreamProcessor struct {
 	translator *StreamTranslator
 }
 
-// ProcessLine processes a single SSE line from Codex.
 func (p *codexStreamProcessor) ProcessLine(line []byte) ([][]byte, *ir.Usage, error) {
-	// Parse OpenAI/Codex chunk to IR events
 	events, err := to_ir.ParseOpenAIChunk(line)
 	if err != nil {
 		return nil, nil, err
@@ -207,7 +197,6 @@ func (p *codexStreamProcessor) ProcessLine(line []byte) ([][]byte, *ir.Usage, er
 	return result.Chunks, result.Usage, nil
 }
 
-// ProcessDone handles the [DONE] signal.
 func (p *codexStreamProcessor) ProcessDone() ([][]byte, error) {
 	return p.translator.Flush(), nil
 }
@@ -242,14 +231,11 @@ func (e *CodexExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth
 	return cliproxyexecutor.Response{Payload: []byte(translated)}, nil
 }
 
-// reasoningModelConfig defines model aliases and their reasoning settings.
 type reasoningModelConfig struct {
-	BaseModel string            // The upstream model name
-	Efforts   map[string]string // alias -> effort level mapping (empty string = no effort override)
+	BaseModel string
+	Efforts   map[string]string
 }
 
-// codexReasoningConfigs maps model aliases to their base model and reasoning effort.
-// To add a new model or alias, simply add a new entry to this slice.
 var codexReasoningConfigs = []reasoningModelConfig{
 	{
 		BaseModel: "gpt-5",
@@ -488,7 +474,6 @@ func (e *CodexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*
 		auth.Metadata["account_id"] = td.AccountID
 	}
 	auth.Metadata["email"] = td.Email
-	// Use unified key in files
 	auth.Metadata["expired"] = td.Expire
 	auth.Metadata["type"] = "codex"
 	now := time.Now().Format(time.RFC3339)
@@ -566,8 +551,6 @@ func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string) {
 	util.ApplyCustomHeadersFromAttrs(r, attrs)
 }
 
-// codexCreds extracts credentials for Codex API.
-// Delegates to the common ExtractCreds function with Codex configuration.
 func codexCreds(a *cliproxyauth.Auth) (apiKey, baseURL string) {
 	return ExtractCreds(a, CodexCredsConfig)
 }

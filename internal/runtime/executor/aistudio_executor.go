@@ -22,22 +22,18 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// AIStudioExecutor routes AI Studio requests through a websocket-backed transport.
 type AIStudioExecutor struct {
 	provider string
 	relay    *wsrelay.Manager
 	cfg      *config.Config
 }
 
-// NewAIStudioExecutor constructs a websocket executor for the provider name.
 func NewAIStudioExecutor(cfg *config.Config, provider string, relay *wsrelay.Manager) *AIStudioExecutor {
 	return &AIStudioExecutor{provider: strings.ToLower(provider), relay: relay, cfg: cfg}
 }
 
-// Identifier returns the logical provider key for routing.
 func (e *AIStudioExecutor) Identifier() string { return "aistudio" }
 
-// PrepareRequest is a no-op because websocket transport already injects headers.
 func (e *AIStudioExecutor) PrepareRequest(_ *http.Request, _ *cliproxyauth.Auth) error {
 	return nil
 }
@@ -89,7 +85,6 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 	defer reporter.trackFailure(ctx, &err)
 
-	// Translate request and count tokens in one operation (uses shared IR)
 	body, estimatedInputTokens, err := e.translateRequestWithTokens(req, opts, true)
 	if err != nil {
 		return nil, err
@@ -145,7 +140,6 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 	go func(first wsrelay.StreamEvent, inputTokens int64) {
 		defer close(out)
 
-		// Create new unified streaming components
 		streamCtx := NewStreamContext()
 		streamCtx.EstimatedInputTokens = inputTokens
 		messageID := "chatcmpl-" + req.Model
@@ -274,7 +268,6 @@ type aistudioStreamProcessor struct {
 }
 
 func (p *aistudioStreamProcessor) ProcessLine(line []byte) ([][]byte, *ir.Usage, error) {
-	// Parse Gemini chunk to IR events
 	var events []ir.UnifiedEvent
 	var err error
 	if p.translator.ctx.ToolSchemaCtx != nil {
@@ -329,13 +322,10 @@ func (e *AIStudioExecutor) translateRequest(req cliproxyexecutor.Request, opts c
 	return payload, translatedPayload{payload: payload, action: action, toFormat: formatGemini}, nil
 }
 
-// translateRequestWithTokens is similar to translateRequest but also returns estimated input tokens.
-// This is more efficient as translation and token counting share the same IR.
 func (e *AIStudioExecutor) translateRequestWithTokens(req cliproxyexecutor.Request, opts cliproxyexecutor.Options, stream bool) (translatedPayload, int64, error) {
 	from := opts.SourceFormat
 	formatGemini := sdktranslator.FromString("gemini")
 
-	// Use the new combined translation + token counting function
 	translation, err := TranslateToGeminiWithTokens(e.cfg, from, req.Model, req.Payload, stream, req.Metadata)
 	if err != nil {
 		return translatedPayload{}, 0, fmt.Errorf("translate request: %w", err)
@@ -390,8 +380,6 @@ func (e *AIStudioExecutor) buildEndpoint(model, action, alt string) string {
 	return base
 }
 
-// ensureColonSpacedJSON normalizes JSON objects so that colons are followed by a single space while
-// keeping the payload otherwise compact. Non-JSON inputs are returned unchanged.
 func ensureColonSpacedJSON(payload []byte) []byte {
 	trimmed := bytes.TrimSpace(payload)
 	if len(trimmed) == 0 {
@@ -437,11 +425,6 @@ func ensureColonSpacedJSON(payload []byte) []byte {
 	return compacted
 }
 
-// =============================================================================
-// Dynamic Model Fetching
-// =============================================================================
-
-// FetchAIStudioModels retrieves available models via websocket relay.
 func FetchAIStudioModels(ctx context.Context, auth *cliproxyauth.Auth, relay *wsrelay.Manager) []*registry.ModelInfo {
 	if relay == nil {
 		return nil

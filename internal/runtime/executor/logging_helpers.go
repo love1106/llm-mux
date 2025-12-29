@@ -6,8 +6,6 @@ import (
 	"strings"
 )
 
-// summarizeErrorBody returns a human-readable summary of an error response body.
-// For HTML responses, it extracts the title tag. For other content types, returns the raw body.
 func summarizeErrorBody(contentType string, body []byte) string {
 	isHTML := strings.Contains(strings.ToLower(contentType), "text/html")
 	if !isHTML {

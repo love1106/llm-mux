@@ -1,11 +1,3 @@
-/**
- * @file Cline executor implementation for API requests
- * @description Stateless executor for Cline API using OpenAI-compatible chat completions.
- * Handles both streaming and non-streaming requests, automatic token refresh, and usage tracking.
- * Cline API uses JWT tokens with "workos:" prefix for authentication and supports various AI models
- * including Minimax, Grok, Claude, and OpenRouter models through a unified interface.
- */
-
 package executor
 
 import (
@@ -25,27 +17,22 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// ClineExecutor is a stateless executor for Cline API using OpenAI-compatible chat completions.
 type ClineExecutor struct {
 	cfg *config.Config
 }
 
-// NewClineExecutor creates a new Cline executor instance.
 func NewClineExecutor(cfg *config.Config) *ClineExecutor {
 	return &ClineExecutor{cfg: cfg}
 }
 
-// Identifier returns the provider identifier for this executor.
 func (e *ClineExecutor) Identifier() string {
 	return "cline"
 }
 
-// PrepareRequest prepares the HTTP request with necessary headers and authentication.
 func (e *ClineExecutor) PrepareRequest(_ *http.Request, _ *cliproxyauth.Auth) error {
 	return nil
 }
 
-// Execute performs a non-streaming request to Cline API.
 func (e *ClineExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {
 	token, baseURL := clineCredentials(auth)
 	if token == "" {
@@ -108,12 +95,11 @@ func (e *ClineExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	if translatedResp != nil {
 		resp = cliproxyexecutor.Response{Payload: translatedResp}
 	} else {
-		resp = cliproxyexecutor.Response{Payload: data} // passthrough
+		resp = cliproxyexecutor.Response{Payload: data}
 	}
 	return resp, nil
 }
 
-// ExecuteStream performs a streaming request to Cline API.
 func (e *ClineExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (stream <-chan cliproxyexecutor.StreamChunk, err error) {
 	token, baseURL := clineCredentials(auth)
 	if token == "" {
@@ -169,8 +155,6 @@ func (e *ClineExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	}), nil
 }
 
-// ClineDataTagPreprocessor creates a preprocessor that handles Cline's SSE format.
-// It strips "data:" prefix and skips [DONE] signals.
 func ClineDataTagPreprocessor() StreamPreprocessor {
 	return func(line []byte) (payload []byte, skip bool) {
 		payload = line
@@ -187,7 +171,6 @@ func ClineDataTagPreprocessor() StreamPreprocessor {
 	}
 }
 
-// clinePreprocess transforms Cline-specific payload format to OpenAI format.
 func clinePreprocess(line []byte, firstChunk bool) []byte {
 	payload := convertClineReasoningToOpenAI(line, firstChunk)
 
@@ -195,17 +178,13 @@ func clinePreprocess(line []byte, firstChunk bool) []byte {
 		return nil
 	}
 
-	// Add data: prefix back for the translator
 	return append([]byte("data: "), payload...)
 }
 
-// clineCredentials extracts access token and base URL from auth metadata.
-// Delegates to the common ExtractCreds function with Cline configuration.
 func clineCredentials(a *cliproxyauth.Auth) (token, baseURL string) {
 	return ExtractCreds(a, ClineCredsConfig)
 }
 
-// applyClineHeaders applies necessary headers for Cline API requests.
 func (e *ClineExecutor) applyClineHeaders(req *http.Request, token string, stream bool) {
 	ApplyAPIHeaders(req, HeaderConfig{
 		Token: token,
@@ -216,8 +195,6 @@ func (e *ClineExecutor) applyClineHeaders(req *http.Request, token string, strea
 	}, stream)
 }
 
-// convertClineReasoningToOpenAI converts Cline API's "reasoning" field to OpenAI's "reasoning_content" field
-// and removes "role" from non-first chunks to comply with OpenAI streaming standard.
 func convertClineReasoningToOpenAI(payload []byte, isFirstChunk bool) []byte {
 	if bytes.Contains(payload, []byte(`"reasoning":`)) && !bytes.Contains(payload, []byte(`"reasoning_content":`)) {
 		payload = bytes.ReplaceAll(payload, []byte(`"reasoning":`), []byte(`"reasoning_content":`))
@@ -231,7 +208,6 @@ func convertClineReasoningToOpenAI(payload []byte, isFirstChunk bool) []byte {
 	return payload
 }
 
-// shouldSkipEmptyContentChunk determines if a chunk with empty/null content should be skipped.
 func shouldSkipEmptyContentChunk(payload []byte) bool {
 	hasEmptyContent := bytes.Contains(payload, []byte(`"content":""`)) ||
 		bytes.Contains(payload, []byte(`"content":null`))
@@ -255,12 +231,10 @@ func shouldSkipEmptyContentChunk(payload []byte) bool {
 	return true
 }
 
-// CountTokens counts tokens in the request for Cline models.
 func (e *ClineExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	return CountTokensForOpenAIProvider(ctx, e.cfg, "cline executor", opts.SourceFormat, req.Model, req.Payload, nil)
 }
 
-// Refresh refreshes the Cline authentication tokens.
 func (e *ClineExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
 	if auth == nil {
 		return nil, fmt.Errorf("cline executor: auth is nil")

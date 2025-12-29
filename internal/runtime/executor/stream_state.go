@@ -6,31 +6,16 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// StreamContext holds all streaming state - single source of truth
-// Replaces: GeminiCLIStreamState, StreamState
 type StreamContext struct {
-	// Claude format state (embed, don't duplicate)
-	ClaudeState *from_ir.ClaudeStreamState
-
-	// Tool call tracking
-	ToolCallIndex int
-	HasToolCalls  bool
-
-	// Finish event tracking - prevents duplicates
-	FinishSent bool
-
-	// Reasoning token estimation
-	ReasoningCharsAccum int
-
-	// Tool schema for parameter normalization (Antigravity workaround)
-	ToolSchemaCtx *ir.ToolSchemaContext
-
-	// Estimated input tokens (for Claude format responses)
+	ClaudeState          *from_ir.ClaudeStreamState
+	ToolCallIndex        int
+	HasToolCalls         bool
+	FinishSent           bool
+	ReasoningCharsAccum  int
+	ToolSchemaCtx        *ir.ToolSchemaContext
 	EstimatedInputTokens int64
-
-	// Gemini format buffering (for delay-1-chunk strategy)
-	PendingGeminiChunk []byte
-	PendingFinishEvent *ir.UnifiedEvent
+	PendingGeminiChunk   []byte
+	PendingFinishEvent   *ir.UnifiedEvent
 }
 
 func NewStreamContext() *StreamContext {
@@ -41,8 +26,6 @@ func NewStreamContext() *StreamContext {
 
 func NewStreamContextWithTools(originalRequest []byte) *StreamContext {
 	ctx := NewStreamContext()
-	// Extract tool schemas from original request for parameter normalization
-	// Antigravity has issue where Gemini ignores tool parameter schemas
 	if len(originalRequest) > 0 {
 		tools := gjson.GetBytes(originalRequest, "tools").Array()
 		if len(tools) > 0 {
@@ -52,7 +35,6 @@ func NewStreamContextWithTools(originalRequest []byte) *StreamContext {
 	return ctx
 }
 
-// MarkFinishSent marks finish as sent, returns false if already sent (idempotent)
 func (s *StreamContext) MarkFinishSent() bool {
 	if s.FinishSent {
 		return false
@@ -61,12 +43,10 @@ func (s *StreamContext) MarkFinishSent() bool {
 	return true
 }
 
-// AccumulateReasoning adds reasoning characters for token estimation
 func (s *StreamContext) AccumulateReasoning(text string) {
 	s.ReasoningCharsAccum += len(text)
 }
 
-// EstimateReasoningTokens returns estimated reasoning tokens (chars/3)
 func (s *StreamContext) EstimateReasoningTokens() int32 {
 	return int32(s.ReasoningCharsAccum / 3)
 }

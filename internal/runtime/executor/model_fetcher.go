@@ -1,4 +1,3 @@
-// Package executor provides model fetching utilities shared across Gemini-family providers.
 package executor
 
 import (
@@ -15,47 +14,26 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// =============================================================================
-// Shared Constants
-// =============================================================================
-
 const (
-	// cloudCodeModelsPath is the endpoint for fetching models from Cloud Code Assist.
 	cloudCodeModelsPath = "/v1internal:fetchAvailableModels"
-
-	// glAPIModelsPath is the endpoint for fetching models from Generative Language API.
-	glAPIModelsPath = "/v1beta/models"
+	glAPIModelsPath     = "/v1beta/models"
 )
 
-// =============================================================================
-// Model Alias Functions
-// =============================================================================
-
-// ModelAliasFunc converts upstream model name to user-facing alias.
-// Returns empty string if the model should be hidden.
 type ModelAliasFunc func(upstreamName string) string
 
-// DefaultGeminiAlias returns the model ID as-is (no transformation).
 func DefaultGeminiAlias(upstreamName string) string {
 	return upstreamName
 }
 
-// =============================================================================
-// Cloud Code Assist Model Fetcher (Antigravity, Gemini CLI)
-// =============================================================================
-
-// CloudCodeFetchConfig holds configuration for fetching models from Cloud Code Assist.
 type CloudCodeFetchConfig struct {
-	BaseURLs     []string       // Fallback order of base URLs
-	Token        string         // Bearer token
-	ProviderType string         // Provider type (e.g., "antigravity", "gemini-cli")
-	UserAgent    string         // User-Agent header
-	Host         string         // Optional Host header override
-	AliasFunc    ModelAliasFunc // Function to convert upstream name to alias
+	BaseURLs     []string
+	Token        string
+	ProviderType string
+	UserAgent    string
+	Host         string
+	AliasFunc    ModelAliasFunc
 }
 
-// FetchCloudCodeModels fetches models from Cloud Code Assist endpoint.
-// This is shared between Antigravity and Gemini CLI providers.
 func FetchCloudCodeModels(ctx context.Context, httpClient *http.Client, cfg CloudCodeFetchConfig) []*registry.ModelInfo {
 	if cfg.Token == "" || len(cfg.BaseURLs) == 0 {
 		return nil
@@ -127,8 +105,6 @@ func FetchCloudCodeModels(ctx context.Context, httpClient *http.Client, cfg Clou
 	return nil
 }
 
-// ParseCloudCodeModels parses Cloud Code Assist response format.
-// Response format: {"models": {"model-id": {...}, ...}} (MAP)
 func ParseCloudCodeModels(body []byte, providerType string, aliasFunc ModelAliasFunc) []*registry.ModelInfo {
 	result := gjson.GetBytes(body, "models")
 	if !result.Exists() {
@@ -158,28 +134,19 @@ func ParseCloudCodeModels(body []byte, providerType string, aliasFunc ModelAlias
 			UpstreamName: originalName,
 		}
 
-		// Apply shared Gemini metadata (handles display name, thinking, limits)
 		registry.ApplyGeminiMeta(modelInfo)
-
 		models = append(models, modelInfo)
 	}
 	return models
 }
 
-// =============================================================================
-// Generative Language API Model Fetcher (Gemini, Vertex, AIStudio)
-// =============================================================================
-
-// GLAPIFetchConfig holds configuration for fetching models from Generative Language API.
 type GLAPIFetchConfig struct {
-	BaseURL      string // Base URL (e.g., "https://generativelanguage.googleapis.com")
-	APIKey       string // API key (mutually exclusive with Bearer)
-	Bearer       string // Bearer token (mutually exclusive with APIKey)
-	ProviderType string // Provider type (e.g., "gemini", "vertex", "aistudio")
+	BaseURL      string
+	APIKey       string
+	Bearer       string
+	ProviderType string
 }
 
-// FetchGLAPIModels fetches models from the Generative Language API.
-// Used by Gemini (API key), Vertex (API key mode), and AIStudio providers.
 func FetchGLAPIModels(ctx context.Context, httpClient *http.Client, cfg GLAPIFetchConfig) []*registry.ModelInfo {
 	if cfg.APIKey == "" && cfg.Bearer == "" {
 		return nil
@@ -228,8 +195,6 @@ func FetchGLAPIModels(ctx context.Context, httpClient *http.Client, cfg GLAPIFet
 	return ParseGLAPIModels(bodyBytes, cfg.ProviderType)
 }
 
-// ParseGLAPIModels parses Generative Language API response format.
-// Response format: {"models": [{...}, ...]} (ARRAY)
 func ParseGLAPIModels(body []byte, providerType string) []*registry.ModelInfo {
 	modelsArray := gjson.GetBytes(body, "models")
 	if !modelsArray.Exists() || !modelsArray.IsArray() {
@@ -240,14 +205,12 @@ func ParseGLAPIModels(body []byte, providerType string) []*registry.ModelInfo {
 	var models []*registry.ModelInfo
 
 	modelsArray.ForEach(func(_, value gjson.Result) bool {
-		// Name format: "models/gemini-2.5-flash"
 		fullName := value.Get("name").String()
 		modelID := strings.TrimPrefix(fullName, "models/")
 		if modelID == "" {
 			return true
 		}
 
-		// Skip non-gemini models (e.g., text-embedding, imagen)
 		if !strings.HasPrefix(modelID, "gemini-") {
 			return true
 		}
@@ -272,7 +235,6 @@ func ParseGLAPIModels(body []byte, providerType string) []*registry.ModelInfo {
 			OutputTokenLimit: int(outputTokenLimit),
 		}
 
-		// Apply shared Gemini metadata (handles thinking support, upstream mapping, etc.)
 		registry.ApplyGeminiMeta(modelInfo)
 
 		models = append(models, modelInfo)
