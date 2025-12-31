@@ -17,6 +17,7 @@ import (
 	"github.com/nghyane/llm-mux/internal/oauth"
 	"github.com/nghyane/llm-mux/internal/provider"
 	"github.com/nghyane/llm-mux/internal/registry"
+	"github.com/nghyane/llm-mux/internal/translator/ir"
 
 	log "github.com/nghyane/llm-mux/internal/logging"
 	"github.com/tidwall/sjson"
@@ -566,7 +567,6 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 
 	if req, ok := data["request"].(map[string]interface{}); ok {
 		req["sessionId"] = generateSessionID()
-		delete(req, "safetySettings")
 
 		if toolConfig, ok := req["toolConfig"].(map[string]interface{}); ok {
 			if funcCallingConfig, ok := toolConfig["functionCallingConfig"].(map[string]interface{}); ok {
@@ -581,22 +581,7 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 		}
 
 		if strings.Contains(modelName, "claude") {
-			if tools, ok := req["tools"].([]interface{}); ok {
-				for _, tool := range tools {
-					if toolMap, ok := tool.(map[string]interface{}); ok {
-						if funcDecls, ok := toolMap["functionDeclarations"].([]interface{}); ok {
-							for _, funcDecl := range funcDecls {
-								if funcDeclMap, ok := funcDecl.(map[string]interface{}); ok {
-									if paramsSchema, exists := funcDeclMap["parametersJsonSchema"]; exists {
-										funcDeclMap["parameters"] = paramsSchema
-										delete(funcDeclMap, "parametersJsonSchema")
-									}
-								}
-							}
-						}
-					}
-				}
-			}
+			convertParametersJsonSchemaForClaude(req)
 		}
 	}
 
@@ -605,7 +590,37 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 		return payload
 	}
 
-	return result
+	validated, report := ir.ValidateAntigravityPayload(result, modelName)
+	report.LogDebug()
+
+	return validated
+}
+
+func convertParametersJsonSchemaForClaude(req map[string]interface{}) {
+	tools, ok := req["tools"].([]interface{})
+	if !ok {
+		return
+	}
+	for _, tool := range tools {
+		toolMap, ok := tool.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		funcDecls, ok := toolMap["functionDeclarations"].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, funcDecl := range funcDecls {
+			funcDeclMap, ok := funcDecl.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if paramsSchema, exists := funcDeclMap["parametersJsonSchema"]; exists {
+				funcDeclMap["parameters"] = paramsSchema
+				delete(funcDeclMap, "parametersJsonSchema")
+			}
+		}
+	}
 }
 
 func generateRequestID() string {
