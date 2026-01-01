@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 
@@ -35,7 +36,7 @@ func ResolveAuthDir(authDir string) (string, error) {
 	if strings.HasPrefix(authDir, "$XDG_CONFIG_HOME") {
 		xdg := os.Getenv("XDG_CONFIG_HOME")
 		if xdg == "" {
-			home, err := os.UserHomeDir()
+			home, err := getUserHomeDir()
 			if err != nil {
 				return "", fmt.Errorf("resolve auth dir: %w", err)
 			}
@@ -51,7 +52,7 @@ func ResolveAuthDir(authDir string) (string, error) {
 	}
 
 	if strings.HasPrefix(authDir, "~") {
-		home, err := os.UserHomeDir()
+		home, err := getUserHomeDir()
 		if err != nil {
 			return "", fmt.Errorf("resolve auth dir: %w", err)
 		}
@@ -64,6 +65,16 @@ func ResolveAuthDir(authDir string) (string, error) {
 		return filepath.Clean(filepath.Join(home, filepath.FromSlash(normalized))), nil
 	}
 	return filepath.Clean(authDir), nil
+}
+
+func getUserHomeDir() (string, error) {
+	if home, err := os.UserHomeDir(); err == nil {
+		return home, nil
+	}
+	if u, err := user.Current(); err == nil && u.HomeDir != "" {
+		return u.HomeDir, nil
+	}
+	return "", fmt.Errorf("$HOME is not defined and user lookup failed")
 }
 
 func CountAuthFiles(authDir string) int {
