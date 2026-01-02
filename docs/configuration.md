@@ -182,7 +182,6 @@ Use `LLM_MUX_STORE_TYPE` to explicitly select a storage backend for multi-instan
 LLM_MUX_STORE_TYPE=postgres
 LLM_MUX_PGSTORE_DSN=postgresql://user:pass@host:5432/db
 LLM_MUX_PGSTORE_SCHEMA=llm_mux          # optional
-LLM_MUX_PGSTORE_LOCAL_PATH=/tmp/cache   # local cache
 ```
 
 ### Git Storage
@@ -192,7 +191,6 @@ LLM_MUX_STORE_TYPE=git
 LLM_MUX_GITSTORE_URL=https://github.com/org/config.git
 LLM_MUX_GITSTORE_USERNAME=user
 LLM_MUX_GITSTORE_TOKEN=ghp_...
-LLM_MUX_GITSTORE_LOCAL_PATH=/tmp/git-cache
 ```
 
 ### S3/Object Storage
@@ -203,8 +201,9 @@ LLM_MUX_OBJECTSTORE_ENDPOINT=https://s3.amazonaws.com
 LLM_MUX_OBJECTSTORE_BUCKET=llm-mux-tokens
 LLM_MUX_OBJECTSTORE_ACCESS_KEY=...
 LLM_MUX_OBJECTSTORE_SECRET_KEY=...
-LLM_MUX_OBJECTSTORE_LOCAL_PATH=/tmp/s3-cache
 ```
+
+All remote stores sync to the standard XDG paths (`~/.config/llm-mux/config.yaml` and `~/.config/llm-mux/auth/`).
 
 ---
 
