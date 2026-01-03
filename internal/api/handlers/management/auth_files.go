@@ -3,8 +3,8 @@ package management
 import (
 	"context"
 	"fmt"
-	"github.com/nghyane/llm-mux/internal/json"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/nghyane/llm-mux/internal/auth/login"
+	"github.com/nghyane/llm-mux/internal/json"
 	log "github.com/nghyane/llm-mux/internal/logging"
 	"github.com/nghyane/llm-mux/internal/oauth"
 	"github.com/nghyane/llm-mux/internal/provider"
@@ -289,41 +290,47 @@ func (h *Handler) DownloadAuthFile(c *gin.Context) {
 	c.Data(200, "application/json", data)
 }
 
-// Upload auth file: multipart or raw JSON with ?name=
+type uploadResult struct {
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	Message string `json:"message,omitempty"`
+}
+
 func (h *Handler) UploadAuthFile(c *gin.Context) {
 	if h.authManager == nil {
 		respondError(c, http.StatusServiceUnavailable, ErrCodeInternalError, "core auth manager unavailable")
 		return
 	}
 	ctx := c.Request.Context()
-	if file, err := c.FormFile("file"); err == nil && file != nil {
-		name := filepath.Base(file.Filename)
-		if !strings.HasSuffix(strings.ToLower(name), ".json") {
-			respondBadRequest(c, "file must be .json")
-			return
+
+	if form, err := c.MultipartForm(); err == nil && form != nil && form.File != nil {
+		var files []*multipart.FileHeader
+		if f := form.File["files"]; len(f) > 0 {
+			files = f
+		} else if f := form.File["file[]"]; len(f) > 0 {
+			files = f
+		} else if f := form.File["file"]; len(f) > 0 {
+			files = f
 		}
-		dst := filepath.Join(h.cfg.AuthDir, name)
-		if !filepath.IsAbs(dst) {
-			if abs, errAbs := filepath.Abs(dst); errAbs == nil {
-				dst = abs
+
+		if len(files) > 0 {
+			results := h.processBatchUpload(ctx, files)
+			allOK := true
+			for _, r := range results {
+				if r.Status != "ok" {
+					allOK = false
+					break
+				}
 			}
-		}
-		if errSave := c.SaveUploadedFile(file, dst); errSave != nil {
-			respondInternalError(c, fmt.Sprintf("failed to save file: %v", errSave))
+			if allOK {
+				respondOK(c, gin.H{"status": "ok", "count": len(results), "results": results})
+			} else {
+				c.JSON(http.StatusMultiStatus, gin.H{"status": "partial", "count": len(results), "results": results})
+			}
 			return
 		}
-		data, errRead := os.ReadFile(dst)
-		if errRead != nil {
-			respondInternalError(c, fmt.Sprintf("failed to read saved file: %v", errRead))
-			return
-		}
-		if errReg := h.registerAuthFromFile(ctx, dst, data); errReg != nil {
-			respondInternalError(c, errReg.Error())
-			return
-		}
-		respondOK(c, gin.H{"status": "ok"})
-		return
 	}
+
 	name := c.Query("name")
 	if name == "" || strings.Contains(name, string(os.PathSeparator)) {
 		respondBadRequest(c, "invalid name")
@@ -354,7 +361,53 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 		respondInternalError(c, err.Error())
 		return
 	}
+	h.syncAuthToRemote(ctx, "Upload", name, dst)
 	respondOK(c, gin.H{"status": "ok"})
+}
+
+func (h *Handler) processBatchUpload(ctx context.Context, files []*multipart.FileHeader) []uploadResult {
+	results := make([]uploadResult, 0, len(files))
+	for _, fileHeader := range files {
+		result := h.processOneUpload(ctx, fileHeader)
+		results = append(results, result)
+	}
+	return results
+}
+
+func (h *Handler) processOneUpload(ctx context.Context, fileHeader *multipart.FileHeader) uploadResult {
+	name := filepath.Base(fileHeader.Filename)
+	if !strings.HasSuffix(strings.ToLower(name), ".json") {
+		return uploadResult{Name: name, Status: "error", Message: "file must be .json"}
+	}
+
+	file, err := fileHeader.Open()
+	if err != nil {
+		return uploadResult{Name: name, Status: "error", Message: fmt.Sprintf("failed to open: %v", err)}
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return uploadResult{Name: name, Status: "error", Message: fmt.Sprintf("failed to read: %v", err)}
+	}
+
+	dst := filepath.Join(h.cfg.AuthDir, name)
+	if !filepath.IsAbs(dst) {
+		if abs, errAbs := filepath.Abs(dst); errAbs == nil {
+			dst = abs
+		}
+	}
+
+	if errWrite := os.WriteFile(dst, data, 0o600); errWrite != nil {
+		return uploadResult{Name: name, Status: "error", Message: fmt.Sprintf("failed to write: %v", errWrite)}
+	}
+
+	if errReg := h.registerAuthFromFile(ctx, dst, data); errReg != nil {
+		return uploadResult{Name: name, Status: "error", Message: errReg.Error()}
+	}
+
+	h.syncAuthToRemote(ctx, "Upload", name, dst)
+	return uploadResult{Name: name, Status: "ok"}
 }
 
 // Delete auth files: single by name or all
@@ -385,14 +438,12 @@ func (h *Handler) DeleteAuthFile(c *gin.Context) {
 					full = abs
 				}
 			}
-			if err = os.Remove(full); err == nil {
-				if errDel := h.deleteTokenRecord(ctx, full); errDel != nil {
-					respondInternalError(c, errDel.Error())
-					return
-				}
-				deleted++
-				h.disableAuth(ctx, full)
+			if errDel := h.deleteTokenRecord(ctx, full); errDel != nil {
+				respondInternalError(c, errDel.Error())
+				return
 			}
+			deleted++
+			h.disableAuth(ctx, full)
 		}
 		respondOK(c, gin.H{"status": "ok", "deleted": deleted})
 		return
@@ -408,12 +459,8 @@ func (h *Handler) DeleteAuthFile(c *gin.Context) {
 			full = abs
 		}
 	}
-	if err := os.Remove(full); err != nil {
-		if os.IsNotExist(err) {
-			respondNotFound(c, "file not found")
-		} else {
-			respondInternalError(c, fmt.Sprintf("failed to remove file: %v", err))
-		}
+	if _, err := os.Stat(full); os.IsNotExist(err) {
+		respondNotFound(c, "file not found")
 		return
 	}
 	if err := h.deleteTokenRecord(ctx, full); err != nil {
@@ -563,4 +610,24 @@ func (h *Handler) saveTokenRecord(ctx context.Context, record *provider.Auth) (s
 		return "", fmt.Errorf("token store unavailable")
 	}
 	return store.Save(ctx, record)
+}
+
+type authPersister interface {
+	PersistAuthFiles(ctx context.Context, message string, paths ...string) error
+}
+
+func (h *Handler) syncAuthToRemote(ctx context.Context, action, name, path string) {
+	store := h.tokenStoreWithBaseDir()
+	if store == nil {
+		return
+	}
+	persister, ok := store.(authPersister)
+	if !ok {
+		return
+	}
+	go func() {
+		if err := persister.PersistAuthFiles(ctx, fmt.Sprintf("%s auth %s", action, name), path); err != nil {
+			log.Warnf("failed to sync auth to remote store: %v", err)
+		}
+	}()
 }

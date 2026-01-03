@@ -25,11 +25,52 @@ type HourlyStats struct {
 }
 
 // APIStats represents aggregated metrics per API key and model.
+// Deprecated: Use ProviderStats, AuthStats, ModelStats instead.
 type APIStats struct {
 	APIKey   string `json:"api_key"`
 	Model    string `json:"model"`
 	Requests int64  `json:"requests"`
 	Tokens   int64  `json:"tokens"`
+}
+
+// ProviderStats represents aggregated metrics per provider.
+type ProviderStats struct {
+	Provider        string   `json:"provider"`
+	Requests        int64    `json:"requests"`
+	SuccessCount    int64    `json:"success_count"`
+	FailureCount    int64    `json:"failure_count"`
+	InputTokens     int64    `json:"input_tokens"`
+	OutputTokens    int64    `json:"output_tokens"`
+	ReasoningTokens int64    `json:"reasoning_tokens"`
+	TotalTokens     int64    `json:"total_tokens"`
+	AccountCount    int64    `json:"account_count"`
+	Models          []string `json:"models"`
+}
+
+// AuthStats represents aggregated metrics per auth account.
+type AuthStats struct {
+	Provider        string `json:"provider"`
+	AuthID          string `json:"auth_id"`
+	Requests        int64  `json:"requests"`
+	SuccessCount    int64  `json:"success_count"`
+	FailureCount    int64  `json:"failure_count"`
+	InputTokens     int64  `json:"input_tokens"`
+	OutputTokens    int64  `json:"output_tokens"`
+	ReasoningTokens int64  `json:"reasoning_tokens"`
+	TotalTokens     int64  `json:"total_tokens"`
+}
+
+// ModelStats represents aggregated metrics per model.
+type ModelStats struct {
+	Model           string `json:"model"`
+	Provider        string `json:"provider"`
+	Requests        int64  `json:"requests"`
+	SuccessCount    int64  `json:"success_count"`
+	FailureCount    int64  `json:"failure_count"`
+	InputTokens     int64  `json:"input_tokens"`
+	OutputTokens    int64  `json:"output_tokens"`
+	ReasoningTokens int64  `json:"reasoning_tokens"`
+	TotalTokens     int64  `json:"total_tokens"`
 }
 
 // DetailRecord represents a single recent request for detailed views.

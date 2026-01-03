@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/nghyane/llm-mux/internal/config"
+	"github.com/nghyane/llm-mux/internal/usage"
 	"github.com/nghyane/llm-mux/internal/util"
 	"gopkg.in/yaml.v3"
 )
@@ -268,6 +269,7 @@ func (h *Handler) PutUsageStatisticsEnabled(c *gin.Context) {
 		h.cfg.Usage.DSN = ""
 	}
 	h.cfgMu.Unlock()
+	usage.SetStatisticsEnabled(value)
 	if !h.persistSilent() {
 		respondInternalError(c, "failed to save config")
 		return

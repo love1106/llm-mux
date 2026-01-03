@@ -306,6 +306,116 @@ func (b *PostgresBackend) QueryAPIStats(ctx context.Context, since time.Time) ([
 	return results, rows.Err()
 }
 
+func (b *PostgresBackend) QueryProviderStats(ctx context.Context, since time.Time) ([]ProviderStats, error) {
+	rows, err := b.pool.Query(ctx, `
+		SELECT 
+			COALESCE(NULLIF(provider, ''), 'unknown') as provider,
+			COUNT(*) as requests,
+			SUM(CASE WHEN failed = false THEN 1 ELSE 0 END) as success_count,
+			SUM(CASE WHEN failed = true THEN 1 ELSE 0 END) as failure_count,
+			COALESCE(SUM(input_tokens), 0) as input_tokens,
+			COALESCE(SUM(output_tokens), 0) as output_tokens,
+			COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
+			COALESCE(SUM(total_tokens), 0) as total_tokens,
+			COUNT(DISTINCT NULLIF(auth_id, '')) as account_count,
+			ARRAY_AGG(DISTINCT NULLIF(model, '')) FILTER (WHERE model != '') as models
+		FROM usage_records
+		WHERE requested_at >= $1
+		GROUP BY provider
+		ORDER BY requests DESC
+	`, since)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query provider stats: %w", err)
+	}
+	defer rows.Close()
+
+	var results []ProviderStats
+	for rows.Next() {
+		var ps ProviderStats
+		if err := rows.Scan(
+			&ps.Provider, &ps.Requests, &ps.SuccessCount, &ps.FailureCount,
+			&ps.InputTokens, &ps.OutputTokens, &ps.ReasoningTokens, &ps.TotalTokens,
+			&ps.AccountCount, &ps.Models,
+		); err != nil {
+			return nil, err
+		}
+		results = append(results, ps)
+	}
+	return results, rows.Err()
+}
+
+func (b *PostgresBackend) QueryAuthStats(ctx context.Context, since time.Time) ([]AuthStats, error) {
+	rows, err := b.pool.Query(ctx, `
+		SELECT 
+			COALESCE(NULLIF(provider, ''), 'unknown') as provider,
+			COALESCE(NULLIF(auth_id, ''), 'unknown') as auth_id,
+			COUNT(*) as requests,
+			SUM(CASE WHEN failed = false THEN 1 ELSE 0 END) as success_count,
+			SUM(CASE WHEN failed = true THEN 1 ELSE 0 END) as failure_count,
+			COALESCE(SUM(input_tokens), 0) as input_tokens,
+			COALESCE(SUM(output_tokens), 0) as output_tokens,
+			COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
+			COALESCE(SUM(total_tokens), 0) as total_tokens
+		FROM usage_records
+		WHERE requested_at >= $1
+		GROUP BY provider, auth_id
+		ORDER BY requests DESC
+	`, since)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query auth stats: %w", err)
+	}
+	defer rows.Close()
+
+	var results []AuthStats
+	for rows.Next() {
+		var as AuthStats
+		if err := rows.Scan(
+			&as.Provider, &as.AuthID, &as.Requests, &as.SuccessCount, &as.FailureCount,
+			&as.InputTokens, &as.OutputTokens, &as.ReasoningTokens, &as.TotalTokens,
+		); err != nil {
+			return nil, err
+		}
+		results = append(results, as)
+	}
+	return results, rows.Err()
+}
+
+func (b *PostgresBackend) QueryModelStats(ctx context.Context, since time.Time) ([]ModelStats, error) {
+	rows, err := b.pool.Query(ctx, `
+		SELECT 
+			COALESCE(NULLIF(model, ''), 'unknown') as model,
+			COALESCE(NULLIF(provider, ''), 'unknown') as provider,
+			COUNT(*) as requests,
+			SUM(CASE WHEN failed = false THEN 1 ELSE 0 END) as success_count,
+			SUM(CASE WHEN failed = true THEN 1 ELSE 0 END) as failure_count,
+			COALESCE(SUM(input_tokens), 0) as input_tokens,
+			COALESCE(SUM(output_tokens), 0) as output_tokens,
+			COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
+			COALESCE(SUM(total_tokens), 0) as total_tokens
+		FROM usage_records
+		WHERE requested_at >= $1
+		GROUP BY model, provider
+		ORDER BY requests DESC
+	`, since)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query model stats: %w", err)
+	}
+	defer rows.Close()
+
+	var results []ModelStats
+	for rows.Next() {
+		var ms ModelStats
+		if err := rows.Scan(
+			&ms.Model, &ms.Provider, &ms.Requests, &ms.SuccessCount, &ms.FailureCount,
+			&ms.InputTokens, &ms.OutputTokens, &ms.ReasoningTokens, &ms.TotalTokens,
+		); err != nil {
+			return nil, err
+		}
+		results = append(results, ms)
+	}
+	return results, rows.Err()
+}
+
 // Cleanup removes records older than the given time.
 func (b *PostgresBackend) Cleanup(ctx context.Context, before time.Time) (int64, error) {
 	result, err := b.pool.Exec(ctx, `

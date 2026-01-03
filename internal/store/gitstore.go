@@ -350,18 +350,25 @@ func (s *GitTokenStore) Delete(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err = os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("auth filestore: delete failed: %w", err)
+	fileExisted := true
+	if err = os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			fileExisted = false
+		} else {
+			return fmt.Errorf("auth filestore: delete failed: %w", err)
+		}
 	}
-	if err == nil {
-		rel, errRel := s.relativeToRepo(path)
-		if errRel != nil {
+
+	rel, errRel := s.relativeToRepo(path)
+	if errRel != nil {
+		if fileExisted {
 			return errRel
 		}
-		messageID := id
-		if errCommit := s.commitAndPushLocked(fmt.Sprintf("Delete auth %s", messageID), rel); errCommit != nil {
-			return errCommit
-		}
+		return nil
+	}
+	messageID := id
+	if errCommit := s.commitAndPushLocked(fmt.Sprintf("Delete auth %s", messageID), rel); errCommit != nil {
+		return errCommit
 	}
 	return nil
 }
@@ -716,6 +723,20 @@ func (s *GitTokenStore) commitAndPushLocked(message string, relPaths ...string) 
 		}
 		return fmt.Errorf("git token store: commit: %w", err)
 	}
+
+	if pullErr := worktree.Pull(&git.PullOptions{Auth: authMethod, RemoteName: "origin"}); pullErr != nil {
+		switch {
+		case errors.Is(pullErr, git.NoErrAlreadyUpToDate),
+			errors.Is(pullErr, git.ErrUnstagedChanges),
+			errors.Is(pullErr, git.ErrNonFastForwardUpdate),
+			errors.Is(pullErr, transport.ErrAuthenticationRequired),
+			errors.Is(pullErr, plumbing.ErrReferenceNotFound),
+			errors.Is(pullErr, transport.ErrEmptyRemoteRepository):
+		default:
+			return fmt.Errorf("git token store: pull before squash: %w", pullErr)
+		}
+	}
+
 	headRef, errHead := repo.Head()
 	if errHead != nil {
 		if !errors.Is(errHead, plumbing.ErrReferenceNotFound) {
@@ -765,56 +786,17 @@ func (s *GitTokenStore) rewriteHeadAsSingleCommit(repo *git.Repository, branch p
 func (s *GitTokenStore) safePush(repo *git.Repository) error {
 	auth := s.gitAuth()
 
+	// Force push is required because rewriteHeadAsSingleCommit squashes history
+	// into a parentless commit, which always diverges from remote history.
 	err := repo.Push(&git.PushOptions{
 		Auth:       auth,
 		RemoteName: "origin",
-		Force:      false,
+		Force:      true,
 	})
 	if err == nil || errors.Is(err, git.NoErrAlreadyUpToDate) {
 		return nil
 	}
-
-	if !errors.Is(err, git.ErrNonFastForwardUpdate) {
-		return err
-	}
-
-	fetchErr := repo.Fetch(&git.FetchOptions{
-		Auth:       auth,
-		RemoteName: "origin",
-	})
-	if fetchErr != nil && !errors.Is(fetchErr, git.NoErrAlreadyUpToDate) {
-		return fmt.Errorf("fetch: %w", fetchErr)
-	}
-
-	wt, err := repo.Worktree()
-	if err != nil {
-		return fmt.Errorf("worktree: %w", err)
-	}
-
-	head, err := repo.Head()
-	if err != nil {
-		return fmt.Errorf("get head: %w", err)
-	}
-
-	pullErr := wt.Pull(&git.PullOptions{
-		Auth:          auth,
-		RemoteName:    "origin",
-		ReferenceName: head.Name(),
-	})
-	if pullErr != nil && !errors.Is(pullErr, git.NoErrAlreadyUpToDate) {
-		return fmt.Errorf("merge failed: %w", pullErr)
-	}
-
-	retryErr := repo.Push(&git.PushOptions{
-		Auth:       auth,
-		RemoteName: "origin",
-		Force:      false,
-	})
-	if retryErr == nil || errors.Is(retryErr, git.NoErrAlreadyUpToDate) {
-		return nil
-	}
-
-	return fmt.Errorf("push failed after retry: %w", retryErr)
+	return err
 }
 
 // PersistConfig commits and pushes configuration changes to git.

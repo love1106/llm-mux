@@ -105,11 +105,40 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SuccessResponse'
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      ok:
+                        type: boolean
+                        example: true
+                      changed:
+                        type: array
+                        items:
+                          type: string
+                        example: ["config"]
+                  meta:
+                    $ref: '#/components/schemas/APIMeta'
         '400':
           description: Invalid YAML
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
         '422':
           description: Invalid configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+        '500':
+          description: Write or reload failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
 
   /latest-version:
     get:
@@ -138,6 +167,12 @@ paths:
                         type: boolean
                   meta:
                     $ref: '#/components/schemas/APIMeta'
+        '502':
+          description: GitHub API request failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
 
   # ============================================================================
   # Boolean Settings
@@ -790,7 +825,18 @@ paths:
     post:
       tags: [Auth Files]
       summary: Upload authentication file
+      description: |
+        Uploads one or more authentication files. Supports both single file upload
+        (via query parameter `name`) and batch upload via multipart form fields.
+        
+        For batch upload, use one of these form field names: `files`, `file[]`, or `file`.
       operationId: uploadAuthFile
+      parameters:
+        - name: name
+          in: query
+          schema:
+            type: string
+          description: File name for single file upload (must end with .json)
       requestBody:
         required: true
         content:
@@ -801,9 +847,86 @@ paths:
                 file:
                   type: string
                   format: binary
+                  description: Single file upload
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  description: Batch upload - multiple files
+          application/json:
+            schema:
+              type: object
+              description: Raw JSON auth file content (use with ?name= query param)
       responses:
         '200':
-          description: Auth file uploaded
+          description: Auth file(s) uploaded successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                        example: ok
+                      count:
+                        type: integer
+                        description: Number of files processed (batch only)
+                      results:
+                        type: array
+                        description: Per-file results (batch only)
+                        items:
+                          type: object
+                          properties:
+                            name:
+                              type: string
+                            status:
+                              type: string
+                              enum: [ok, error]
+                            message:
+                              type: string
+                  meta:
+                    $ref: '#/components/schemas/APIMeta'
+        '207':
+          description: Partial success (some files failed in batch upload)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: partial
+                  count:
+                    type: integer
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        status:
+                          type: string
+                          enum: [ok, error]
+                        message:
+                          type: string
+        '400':
+          description: Invalid file name or format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+        '503':
+          description: Auth manager unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
     delete:
       tags: [Auth Files]
       summary: Delete authentication file
@@ -864,25 +987,78 @@ paths:
     post:
       tags: [Auth Files]
       summary: Import Vertex AI credentials
+      description: |
+        Imports a Google Cloud service account JSON file for Vertex AI authentication.
+        The file must contain valid service account credentials with `project_id` and `client_email` fields.
       operationId: importVertexCredential
+      parameters:
+        - name: location
+          in: query
+          schema:
+            type: string
+            default: us-central1
+          description: Vertex AI location/region
       requestBody:
         required: true
         content:
-          application/json:
+          multipart/form-data:
             schema:
               type: object
+              required: [file]
               properties:
-                credentials:
-                  type: object
-                  description: Google Cloud service account JSON
-                project_id:
+                file:
                   type: string
+                  format: binary
+                  description: Google Cloud service account JSON file
                 location:
                   type: string
-                  default: us-central1
+                  description: Vertex AI location (alternative to query param)
       responses:
         '200':
-          description: Credentials imported
+          description: Credentials imported successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                        example: ok
+                      auth_file:
+                        type: string
+                        description: Path to the saved auth file
+                      project_id:
+                        type: string
+                      email:
+                        type: string
+                        description: Service account email
+                      location:
+                        type: string
+                        example: us-central1
+                  meta:
+                    $ref: '#/components/schemas/APIMeta'
+        '400':
+          description: Invalid service account file or missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+        '500':
+          description: Failed to save credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+        '503':
+          description: Configuration unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
 
   # ============================================================================
   # OAuth Flow
@@ -967,6 +1143,20 @@ paths:
       responses:
         '200':
           description: OAuth flow cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                        example: ok
+                  meta:
+                    $ref: '#/components/schemas/APIMeta'
         '404':
           description: OAuth state not found
 
@@ -1028,13 +1218,28 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [data, meta]
                 properties:
-                  success:
-                    type: boolean
-                  message:
-                    type: string
-                  removed:
-                    type: integer
+                  data:
+                    type: object
+                    properties:
+                      success:
+                        type: boolean
+                        example: true
+                      message:
+                        type: string
+                        example: Logs cleared successfully
+                      removed:
+                        type: integer
+                        description: Number of rotated log files removed
+                  meta:
+                    $ref: '#/components/schemas/APIMeta'
+        '400':
+          description: Logging to file disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
 
   /request-error-logs:
     get:
@@ -1098,7 +1303,32 @@ paths:
     get:
       tags: [Usage]
       summary: Get usage statistics
+      description: |
+        Returns comprehensive usage statistics with breakdowns by provider, account, and model.
+        Supports optional time range filtering via query parameters.
       operationId: getUsageStatistics
+      parameters:
+        - name: days
+          in: query
+          description: "Number of days to include (default: retention_days from config)"
+          schema:
+            type: integer
+            minimum: 1
+            example: 7
+        - name: from
+          in: query
+          description: "Start date (YYYY-MM-DD or RFC3339)"
+          schema:
+            type: string
+            format: date
+            example: "2026-01-01"
+        - name: to
+          in: query
+          description: "End date (YYYY-MM-DD or RFC3339)"
+          schema:
+            type: string
+            format: date
+            example: "2026-01-03"
       responses:
         '200':
           description: Usage statistics
@@ -1381,56 +1611,196 @@ components:
     UsageStats:
       type: object
       properties:
-        counters:
+        summary:
+          $ref: '#/components/schemas/UsageSummary'
+        by_provider:
           type: object
-          properties:
-            total_requests:
-              type: integer
-            success_count:
-              type: integer
-            failure_count:
-              type: integer
-            total_tokens:
-              type: integer
+          description: Usage statistics grouped by provider
+          additionalProperties:
+            $ref: '#/components/schemas/UsageProviderStats'
+        by_account:
+          type: object
+          description: Usage statistics grouped by auth account (key format provider:auth_id)
+          additionalProperties:
+            $ref: '#/components/schemas/UsageAccountStats'
+        by_model:
+          type: object
+          description: Usage statistics grouped by model
+          additionalProperties:
+            $ref: '#/components/schemas/UsageModelStats'
+        timeline:
+          $ref: '#/components/schemas/UsageTimeline'
+        period:
+          $ref: '#/components/schemas/UsagePeriod'
+
+    UsageSummary:
+      type: object
+      properties:
+        total_requests:
+          type: integer
+          format: int64
+        success_count:
+          type: integer
+          format: int64
+        failure_count:
+          type: integer
+          format: int64
+        tokens:
+          $ref: '#/components/schemas/TokenSummary'
+
+    TokenSummary:
+      type: object
+      properties:
+        total:
+          type: integer
+          format: int64
+        input:
+          type: integer
+          format: int64
+        output:
+          type: integer
+          format: int64
+        reasoning:
+          type: integer
+          format: int64
+
+    UsageProviderStats:
+      type: object
+      properties:
+        requests:
+          type: integer
+          format: int64
+        success:
+          type: integer
+          format: int64
+        failure:
+          type: integer
+          format: int64
+        tokens:
+          $ref: '#/components/schemas/TokenSummary'
+        accounts:
+          type: integer
+          format: int64
+          description: Number of unique auth accounts used
+        models:
+          type: array
+          items:
+            type: string
+          description: List of models used with this provider
+
+    UsageAccountStats:
+      type: object
+      properties:
+        provider:
+          type: string
+        auth_id:
+          type: string
+        requests:
+          type: integer
+          format: int64
+        success:
+          type: integer
+          format: int64
+        failure:
+          type: integer
+          format: int64
+        tokens:
+          $ref: '#/components/schemas/TokenSummary'
+
+    UsageModelStats:
+      type: object
+      properties:
+        provider:
+          type: string
+        requests:
+          type: integer
+          format: int64
+        success:
+          type: integer
+          format: int64
+        failure:
+          type: integer
+          format: int64
+        tokens:
+          $ref: '#/components/schemas/TokenSummary'
+
+    UsageTimeline:
+      type: object
+      properties:
         by_day:
           type: array
           items:
-            type: object
-            properties:
-              day:
-                type: string
-                format: date
-              requests:
-                type: integer
-              tokens:
-                type: integer
+            $ref: '#/components/schemas/UsageDayStats'
         by_hour:
           type: array
           items:
-            type: object
-            properties:
-              hour:
-                type: integer
-                description: Hour of day (0-23)
-              requests:
-                type: integer
-              tokens:
-                type: integer
-        by_api:
-          type: object
-          additionalProperties:
-            type: object
-            properties:
-              total_requests:
-                type: integer
-              total_tokens:
-                type: integer
-              models:
-                type: object
-                additionalProperties:
-                  type: object
-                  properties:
-                    total_requests:
-                      type: integer
-                    total_tokens:
-                      type: integer
+            $ref: '#/components/schemas/UsageHourStats'
+
+    UsageDayStats:
+      type: object
+      properties:
+        day:
+          type: string
+          format: date
+        requests:
+          type: integer
+          format: int64
+        tokens:
+          type: integer
+          format: int64
+
+    UsageHourStats:
+      type: object
+      properties:
+        hour:
+          type: integer
+          description: Hour of day (0-23)
+        requests:
+          type: integer
+          format: int64
+        tokens:
+          type: integer
+          format: int64
+
+    UsagePeriod:
+      type: object
+      properties:
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        retention_days:
+          type: integer
+
+    # Error Response Schemas
+    APIError:
+      type: object
+      description: Standard error response envelope for all error responses
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/APIErrorDetail'
+
+    APIErrorDetail:
+      type: object
+      description: Error detail object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Machine-readable error code
+          enum:
+            - INVALID_REQUEST
+            - INVALID_CONFIG
+            - NOT_FOUND
+            - UNAUTHORIZED
+            - FORBIDDEN
+            - INTERNAL_ERROR
+            - WRITE_FAILED
+            - RELOAD_FAILED
+            - VALIDATION_ERROR
+        message:
+          type: string
+          description: Human-readable error message
