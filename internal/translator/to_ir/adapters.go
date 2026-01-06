@@ -76,6 +76,7 @@ func init() {
 	translator.RegisterToIR("openai-response", openAIParser{})
 	translator.RegisterToIR("claude", claudeParser{})
 	translator.RegisterToIR("gemini", geminiParser{})
-	translator.RegisterToIR("gemini-cli", geminiParser{})
+	// Note: "gemini-cli" is not registered - it uses the same format as "gemini"
+	// The difference is transport (envelope wrapping), handled by executor
 	translator.RegisterToIR("ollama", ollamaParser{})
 }

@@ -2,8 +2,8 @@ package ir
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
-	"github.com/nghyane/llm-mux/internal/json"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -48,7 +48,7 @@ func Ptr[T any](v T) *T {
 }
 
 // ErrInvalidJSON is returned when JSON parsing fails.
-var ErrInvalidJSON = &json.UnmarshalTypeError{Value: "invalid json"}
+var ErrInvalidJSON = errors.New("invalid json")
 
 // ExtractThoughtSignature extracts thought signature from a gjson.Result.
 // Returns []byte as per SDK spec. Handles both camelCase and snake_case field names.

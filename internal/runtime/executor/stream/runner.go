@@ -12,8 +12,8 @@ import (
 	"github.com/nghyane/llm-mux/internal/config"
 	log "github.com/nghyane/llm-mux/internal/logging"
 	"github.com/nghyane/llm-mux/internal/provider"
+	"github.com/nghyane/llm-mux/internal/sseutil"
 	"github.com/nghyane/llm-mux/internal/streamutil"
-	"github.com/nghyane/llm-mux/internal/translator/from_ir"
 	"github.com/nghyane/llm-mux/internal/translator/ir"
 	"github.com/nghyane/llm-mux/internal/translator/to_ir"
 	"github.com/tidwall/gjson"
@@ -65,9 +65,9 @@ type StreamConfig struct {
 
 func GeminiPreprocessor() StreamPreprocessor {
 	return func(line []byte) (payload []byte, skip bool) {
-		filtered := FilterSSEUsageMetadata(line)
+		filtered := sseutil.FilterSSEUsageMetadata(line)
 
-		payload = JsonPayload(filtered)
+		payload = sseutil.JSONPayload(filtered)
 		if payload == nil {
 			return nil, true
 		}
@@ -360,23 +360,24 @@ func (p *OpenAIStreamProcessor) ProcessDone() ([][]byte, error) {
 	return append(result.Chunks, flushed...), nil
 }
 
-type GeminiCLIStreamProcessor struct {
-	Translator *StreamTranslator
+// GeminiStreamProcessor processes Gemini SSE stream chunks.
+// This is the standard processor for Gemini format responses.
+type GeminiStreamProcessor struct {
+	translator *StreamTranslator
 }
 
-func NewGeminiCLIStreamProcessor(translator *StreamTranslator) *GeminiCLIStreamProcessor {
-	return &GeminiCLIStreamProcessor{Translator: translator}
-}
-
-func (p *GeminiCLIStreamProcessor) ProcessLine(payload []byte) ([][]byte, *ir.Usage, error) {
-	state := p.Translator.Ctx.GeminiState
-	var events []ir.UnifiedEvent
-	var err error
-	if p.Translator.Ctx.ToolSchemaCtx != nil {
-		events, err = (&from_ir.VertexEnvelopeProvider{}).ParseStreamChunkWithStateContext(payload, state, p.Translator.Ctx.ToolSchemaCtx)
-	} else {
-		events, err = (&from_ir.VertexEnvelopeProvider{}).ParseStreamChunkWithState(payload, state)
+// NewGeminiStreamProcessor creates a processor for Gemini streams.
+func NewGeminiStreamProcessor(cfg *config.Config, from provider.Format, model, messageID string, streamCtx *StreamContext) *GeminiStreamProcessor {
+	if streamCtx == nil {
+		streamCtx = NewStreamContext()
 	}
+	return &GeminiStreamProcessor{
+		translator: NewStreamTranslator(cfg, from, from.String(), model, messageID, streamCtx),
+	}
+}
+
+func (p *GeminiStreamProcessor) ProcessLine(line []byte) ([][]byte, *ir.Usage, error) {
+	events, err := to_ir.ParseGeminiChunkWithStateContext(line, p.translator.Ctx.GeminiState, p.translator.Ctx.ToolSchemaCtx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -384,15 +385,15 @@ func (p *GeminiCLIStreamProcessor) ProcessLine(payload []byte) ([][]byte, *ir.Us
 		return nil, nil, nil
 	}
 
-	result, err := p.Translator.Translate(events)
+	result, err := p.translator.Translate(events)
 	if err != nil {
 		return nil, nil, err
 	}
 	return result.Chunks, result.Usage, nil
 }
 
-func (p *GeminiCLIStreamProcessor) ProcessDone() ([][]byte, error) {
-	return p.Translator.Flush()
+func (p *GeminiStreamProcessor) ProcessDone() ([][]byte, error) {
+	return p.translator.Flush()
 }
 
 // ConvertPipelineToStreamChunk converts pipeline output to provider.StreamChunk channel

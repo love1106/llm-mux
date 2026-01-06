@@ -101,7 +101,7 @@ func NewStreamTranslator(cfg *config.Config, from provider.Format, to, model, me
 		Ctx:       Ctx,
 	}
 
-	if to == "gemini" || to == "gemini-cli" {
+	if provider.IsGeminiFormat(to) {
 		st.eventBuffer = NewPassthroughEventBuffer()
 		st.chunkBuffer = NewGeminiDelayBuffer()
 	} else {
@@ -255,8 +255,8 @@ func (t *StreamTranslator) preprocess(event *ir.UnifiedEvent) bool {
 
 // convertEvent converts single event to target format
 func (t *StreamTranslator) convertEvent(event *ir.UnifiedEvent) ([]byte, error) {
-	switch t.to {
-	case "openai", "cline":
+	switch {
+	case t.to == "openai" || t.to == "cline":
 		idx := 0
 		if event.Type == ir.EventTypeToolCall {
 			idx = t.Ctx.ToolCallIndex
@@ -268,11 +268,11 @@ func (t *StreamTranslator) convertEvent(event *ir.UnifiedEvent) ([]byte, error) 
 			}
 		}
 		return from_ir.ToOpenAIChunk(*event, t.model, t.messageID, idx)
-	case "claude":
+	case t.to == "claude":
 		return from_ir.ToClaudeSSE(*event, t.Ctx.ClaudeState)
-	case "gemini", "gemini-cli":
+	case provider.IsGeminiFormat(t.to):
 		return from_ir.ToGeminiChunk(*event, t.model)
-	case "ollama":
+	case t.to == "ollama":
 		return from_ir.ToOllamaChatChunk(*event, t.model)
 	default:
 		return nil, nil // unsupported format

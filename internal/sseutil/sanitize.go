@@ -1,4 +1,4 @@
-package executor
+package sseutil
 
 import (
 	"strings"
@@ -7,10 +7,10 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// sanitizeUndefinedValues removes "[undefined]" placeholder values from JSON payloads.
+// SanitizeUndefinedValues removes "[undefined]" placeholder values from JSON payloads.
 // Some clients send "[undefined]" as a placeholder for missing values which breaks
 // provider APIs. This function recursively removes such entries.
-func sanitizeUndefinedValues(payload []byte) []byte {
+func SanitizeUndefinedValues(payload []byte) []byte {
 	if !strings.Contains(string(payload), "[undefined]") {
 		return payload
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/nghyane/llm-mux/internal/registry"
 	"github.com/nghyane/llm-mux/internal/runtime/executor"
 	"github.com/nghyane/llm-mux/internal/runtime/executor/stream"
+	"github.com/nghyane/llm-mux/internal/sseutil"
 	"github.com/nghyane/llm-mux/internal/streamutil"
 	"github.com/nghyane/llm-mux/internal/translator/ir"
 	"github.com/nghyane/llm-mux/internal/translator/preprocess"
@@ -259,8 +260,8 @@ func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *provider.Auth,
 			}
 
 			line := scanner.Bytes()
-			filtered := executor.FilterSSEUsageMetadata(line)
-			payload := executor.JSONPayload(filtered)
+			filtered := sseutil.FilterSSEUsageMetadata(line)
+			payload := sseutil.JSONPayload(filtered)
 			if len(payload) == 0 {
 				continue
 			}

@@ -15,6 +15,7 @@ import (
 	"github.com/nghyane/llm-mux/internal/registry"
 	"github.com/nghyane/llm-mux/internal/runtime/executor"
 	"github.com/nghyane/llm-mux/internal/runtime/executor/stream"
+	"github.com/nghyane/llm-mux/internal/sseutil"
 	"github.com/nghyane/llm-mux/internal/streamutil"
 	"github.com/nghyane/llm-mux/internal/translator/ir"
 	"github.com/nghyane/llm-mux/internal/translator/to_ir"
@@ -166,7 +167,7 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *provider.Aut
 			case wsrelay.MessageTypeStreamStart:
 			case wsrelay.MessageTypeStreamChunk:
 				if len(event.Payload) > 0 {
-					filtered := executor.FilterSSEUsageMetadata(event.Payload)
+					filtered := sseutil.FilterSSEUsageMetadata(event.Payload)
 
 					chunks, usage, err := processor.ProcessLine(bytes.Clone(filtered))
 					if err != nil {

@@ -4,10 +4,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tidwall/gjson"
-
 	"github.com/nghyane/llm-mux/internal/json"
 	"github.com/nghyane/llm-mux/internal/translator/ir"
+	"github.com/tidwall/gjson"
 )
 
 // ensureToolCallID returns the ID from functionCall or generates one if empty.

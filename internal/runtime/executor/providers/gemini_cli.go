@@ -19,8 +19,12 @@ import (
 	"github.com/nghyane/llm-mux/internal/provider"
 	"github.com/nghyane/llm-mux/internal/registry"
 	"github.com/nghyane/llm-mux/internal/runtime/executor"
+	"github.com/nghyane/llm-mux/internal/runtime/executor/providers/cloudcode"
 	"github.com/nghyane/llm-mux/internal/runtime/executor/stream"
 	"github.com/nghyane/llm-mux/internal/runtime/geminicli"
+	"github.com/nghyane/llm-mux/internal/translator/from_ir"
+	"github.com/nghyane/llm-mux/internal/translator/ir"
+	"github.com/nghyane/llm-mux/internal/util"
 	"github.com/tidwall/sjson"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -57,9 +61,22 @@ func (e *GeminiCLIExecutor) Execute(ctx context.Context, auth *provider.Auth, re
 
 	from := opts.SourceFormat
 
-	basePayload, err := stream.TranslateToGeminiCLI(e.cfg, from, req.Model, req.Payload, false, req.Metadata)
-	if err != nil {
-		return resp, fmt.Errorf("failed to translate request: %w", err)
+	var basePayload []byte
+	if ir.IsClaudeModel(req.Model) {
+		irReq, errIR := stream.ConvertRequestToIR(from, req.Model, req.Payload, req.Metadata)
+		if errIR != nil {
+			return resp, fmt.Errorf("failed to parse request: %w", errIR)
+		}
+		basePayload, err = from_ir.ToVertexClaudeRequest(irReq)
+		if err != nil {
+			return resp, fmt.Errorf("failed to translate request: %w", err)
+		}
+	} else {
+		geminiPayload, errGemini := stream.TranslateToGemini(e.cfg, from, req.Model, req.Payload, false, req.Metadata)
+		if errGemini != nil {
+			return resp, fmt.Errorf("failed to translate request: %w", errGemini)
+		}
+		basePayload = cloudcode.RequestEnvelope(geminiPayload)
 	}
 
 	action := "generateContent"
@@ -138,8 +155,11 @@ func (e *GeminiCLIExecutor) Execute(ctx context.Context, auth *provider.Auth, re
 		if httpResp.StatusCode >= 200 && httpResp.StatusCode < 300 {
 			reporter.Publish(ctx, executor.ExtractUsageFromGeminiResponse(data))
 
-			fromFormat := provider.FromString("gemini-cli")
-			translatedResp, err := stream.TranslateResponseNonStream(e.cfg, fromFormat, from, data, attemptModel)
+			// Unwrap envelope if present (Gemini CLI wraps response in {"response": ...})
+			// This allows us to use the standard Gemini format translator.
+			cleanData := cloudcode.ResponseUnwrap(data)
+
+			translatedResp, err := stream.TranslateResponseNonStream(e.cfg, provider.FormatGemini, from, cleanData, attemptModel)
 			if err != nil {
 				return resp, err
 			}
@@ -194,12 +214,33 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *provider.Au
 
 	from := opts.SourceFormat
 
-	translation, err := stream.TranslateToGeminiCLIWithTokens(e.cfg, from, req.Model, req.Payload, true, req.Metadata)
-	if err != nil {
-		return nil, fmt.Errorf("failed to translate request: %w", err)
+	var translation *stream.TranslationResult
+	var estimatedInputTokens int64
+	if ir.IsClaudeModel(req.Model) {
+		irReq, errIR := stream.ConvertRequestToIR(from, req.Model, req.Payload, req.Metadata)
+		if errIR != nil {
+			return nil, fmt.Errorf("failed to parse request: %w", errIR)
+		}
+		claudePayload, errClaude := from_ir.ToVertexClaudeRequest(irReq)
+		if errClaude != nil {
+			return nil, fmt.Errorf("failed to translate request: %w", errClaude)
+		}
+		translation = &stream.TranslationResult{
+			Payload:              claudePayload,
+			IR:                   irReq,
+			EstimatedInputTokens: util.CountGeminiTokensFromIR(irReq),
+		}
+		estimatedInputTokens = translation.EstimatedInputTokens
+	} else {
+		var errGemini error
+		translation, errGemini = stream.TranslateToGeminiWithTokens(e.cfg, from, req.Model, req.Payload, true, req.Metadata)
+		if errGemini != nil {
+			return nil, fmt.Errorf("failed to translate request: %w", errGemini)
+		}
+		translation.Payload = cloudcode.RequestEnvelope(translation.Payload)
+		estimatedInputTokens = translation.EstimatedInputTokens
 	}
 	basePayload := translation.Payload
-	estimatedInputTokens := translation.EstimatedInputTokens
 
 	projectID := resolveGeminiProjectID(auth)
 	models := []string{req.Model}
@@ -293,12 +334,21 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *provider.Au
 		streamCtx.EstimatedInputTokens = estimatedInputTokens
 		messageID := "chatcmpl-" + attemptModel
 
-		translator := stream.NewStreamTranslator(e.cfg, from, from.String(), attemptModel, messageID, streamCtx)
-		processor := stream.NewGeminiCLIStreamProcessor(translator)
+		processor := stream.NewGeminiStreamProcessor(e.cfg, from, attemptModel, messageID, streamCtx)
+
+		// Use GeminiPreprocessor with UnwrapEnvelope for envelope-wrapped responses
+		geminiPreprocessFn := stream.GeminiPreprocessor()
+		preprocessor := func(line []byte) ([]byte, bool) {
+			payload, skip := geminiPreprocessFn(line)
+			if skip || payload == nil {
+				return nil, true
+			}
+			return cloudcode.ResponseUnwrap(payload), false
+		}
 
 		streamChan = stream.RunSSEStream(ctx, httpResp.Body, reporter, processor, stream.StreamConfig{
 			ExecutorName:    "gemini-cli",
-			Preprocessor:    stream.GeminiPreprocessor(),
+			Preprocessor:    preprocessor,
 			EnsurePublished: true,
 		})
 		return streamChan, nil
@@ -328,9 +378,23 @@ func (e *GeminiCLIExecutor) CountTokens(ctx context.Context, auth *provider.Auth
 
 	for idx := 0; idx < len(models); idx++ {
 		attemptModel := models[idx]
-		payload, errTranslate := stream.TranslateToGeminiCLI(e.cfg, from, attemptModel, req.Payload, false, req.Metadata)
-		if errTranslate != nil {
-			return provider.Response{}, fmt.Errorf("failed to translate request: %w", errTranslate)
+		var payload []byte
+		if ir.IsClaudeModel(attemptModel) {
+			irReq, errIR := stream.ConvertRequestToIR(from, attemptModel, req.Payload, req.Metadata)
+			if errIR != nil {
+				return provider.Response{}, fmt.Errorf("failed to parse request: %w", errIR)
+			}
+			var errClaude error
+			payload, errClaude = from_ir.ToVertexClaudeRequest(irReq)
+			if errClaude != nil {
+				return provider.Response{}, fmt.Errorf("failed to translate request: %w", errClaude)
+			}
+		} else {
+			geminiPayload, errGemini := stream.TranslateToGemini(e.cfg, from, attemptModel, req.Payload, false, req.Metadata)
+			if errGemini != nil {
+				return provider.Response{}, fmt.Errorf("failed to translate request: %w", errGemini)
+			}
+			payload = cloudcode.RequestEnvelope(geminiPayload)
 		}
 
 		payload = deleteJSONField(payload, "project")

@@ -1,26 +1,15 @@
 package stream
 
 import (
-	"bytes"
-	"strings"
-
 	"github.com/nghyane/llm-mux/internal/config"
 	"github.com/nghyane/llm-mux/internal/provider"
 	"github.com/nghyane/llm-mux/internal/registry"
+	"github.com/nghyane/llm-mux/internal/sseutil"
 	"github.com/nghyane/llm-mux/internal/translator"
 	"github.com/nghyane/llm-mux/internal/translator/from_ir"
 	"github.com/nghyane/llm-mux/internal/translator/ir"
 	"github.com/nghyane/llm-mux/internal/translator/preprocess"
-	"github.com/nghyane/llm-mux/internal/translator/to_ir"
 	"github.com/nghyane/llm-mux/internal/util"
-	"github.com/tidwall/sjson"
-)
-
-var (
-	FormatOpenAI = provider.FromString("openai")
-	FormatGemini = provider.FromString("gemini")
-	FormatCodex  = provider.FromString("codex")
-	FormatClaude = provider.FromString("claude")
 )
 
 func ExtractUsageFromEvents(events []ir.UnifiedEvent) *ir.Usage {
@@ -62,47 +51,6 @@ func TranslateToGeminiWithTokens(cfg *config.Config, from provider.Format, model
 
 	if from.String() == "claude" {
 		result.EstimatedInputTokens = util.CountTokensFromIR(model, irReq)
-	}
-
-	return result, nil
-}
-
-func TranslateToGeminiCLIWithTokens(cfg *config.Config, from provider.Format, model string, payload []byte, streaming bool, metadata map[string]any) (*TranslationResult, error) {
-	fromStr := from.String()
-	isClaudeModel := strings.Contains(model, "claude")
-
-	if (fromStr == "gemini" || fromStr == "gemini-cli") && !isClaudeModel {
-		cliPayload, _ := sjson.SetRawBytes([]byte(`{}`), "request", payload)
-		return &TranslationResult{
-			Payload:              ApplyPayloadConfigToIR(cfg, model, cliPayload),
-			EstimatedInputTokens: 0,
-		}, nil
-	}
-
-	irReq, err := ConvertRequestToIR(from, model, payload, metadata)
-	if err != nil {
-		return nil, err
-	}
-
-	if isClaudeModel && (fromStr == "gemini" || fromStr == "gemini-cli") {
-		irReq.Messages = to_ir.MergeConsecutiveModelThinking(irReq.Messages)
-	}
-
-	convertedJSON, err := translator.ConvertRequest("vertex-envelope", irReq)
-	if err != nil {
-		return nil, err
-	}
-
-	result := &TranslationResult{
-		Payload: ApplyPayloadConfigToIR(cfg, model, convertedJSON),
-		IR:      irReq,
-	}
-
-	if fromStr == "claude" {
-		result.EstimatedInputTokens = util.CountGeminiTokensFromIR(irReq)
-		if irReq.Thinking != nil && irReq.Thinking.ThinkingBudget != nil && *irReq.Thinking.ThinkingBudget > 0 {
-			result.EstimatedInputTokens += util.ThinkingModeOverhead
-		}
 	}
 
 	return result, nil
@@ -198,14 +146,6 @@ func NormalizeIRLimits(model string, req *ir.UnifiedChatRequest) {
 	}
 }
 
-func TranslateToGeminiCLI(cfg *config.Config, from provider.Format, model string, payload []byte, streaming bool, metadata map[string]any) ([]byte, error) {
-	result, err := TranslateToGeminiCLIWithTokens(cfg, from, model, payload, streaming, metadata)
-	if err != nil {
-		return nil, err
-	}
-	return result.Payload, nil
-}
-
 func ExtractThinkingFromMetadata(metadata map[string]any) (budget *int, include *bool, hasOverride bool) {
 	if metadata == nil {
 		return nil, nil, false
@@ -264,48 +204,16 @@ func TranslateToGemini(cfg *config.Config, from provider.Format, model string, p
 	return result.Payload, nil
 }
 
-// FilterSSEUsageMetadata filters usage metadata from SSE payload
-func FilterSSEUsageMetadata(payload []byte) []byte {
-	// This is a placeholder - the actual implementation should be imported from executor
-	// For now, just return the payload as-is
-	return payload
-}
-
-// JsonPayload extracts JSON payload from SSE line
-func JsonPayload(line []byte) []byte {
-	trimmed := bytes.TrimSpace(line)
-	if len(trimmed) == 0 {
-		return nil
-	}
-
-	// Check if it starts with "data:" prefix
-	dataPrefix := []byte("data:")
-	if bytes.HasPrefix(trimmed, dataPrefix) {
-		trimmed = bytes.TrimSpace(trimmed[len(dataPrefix):])
-	}
-
-	if len(trimmed) == 0 {
-		return nil
-	}
-
-	// Check if it's valid JSON (starts with { or [)
-	if trimmed[0] != '{' && trimmed[0] != '[' {
-		return nil
-	}
-
-	return trimmed
-}
-
-// SanitizeUndefinedValues removes undefined JavaScript values from JSON
+// SanitizeUndefinedValues removes undefined JavaScript values from JSON.
+// Delegates to sseutil for shared implementation.
 func SanitizeUndefinedValues(payload []byte) []byte {
-	// Simple passthrough for now - actual implementation may need more logic
-	return payload
+	return sseutil.SanitizeUndefinedValues(payload)
 }
 
-// ApplyPayloadConfigToIR applies configuration to the payload
+// ApplyPayloadConfigToIR applies configuration to the payload.
+// Delegates to sseutil for shared implementation.
 func ApplyPayloadConfigToIR(cfg *config.Config, model string, payload []byte) []byte {
-	// Placeholder - actual implementation depends on config structure
-	return payload
+	return sseutil.ApplyPayloadConfig(cfg, model, payload)
 }
 
 // ApplyThinkingToIR applies thinking configuration to the IR request

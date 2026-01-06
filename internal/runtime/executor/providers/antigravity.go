@@ -2,6 +2,7 @@ package providers
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -20,6 +21,7 @@ import (
 	"github.com/nghyane/llm-mux/internal/provider"
 	"github.com/nghyane/llm-mux/internal/registry"
 	"github.com/nghyane/llm-mux/internal/runtime/executor"
+	"github.com/nghyane/llm-mux/internal/runtime/executor/providers/cloudcode"
 	"github.com/nghyane/llm-mux/internal/runtime/executor/stream"
 	"github.com/nghyane/llm-mux/internal/translator/ir"
 
@@ -70,10 +72,11 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *provider.Auth, 
 
 	from := opts.SourceFormat
 
-	translated, errTranslate := stream.TranslateToGeminiCLI(e.cfg, from, req.Model, req.Payload, false, req.Metadata)
-	if errTranslate != nil {
-		return resp, fmt.Errorf("failed to translate request: %w", errTranslate)
+	geminiPayload, errGemini := stream.TranslateToGemini(e.cfg, from, req.Model, req.Payload, false, req.Metadata)
+	if errGemini != nil {
+		return resp, fmt.Errorf("failed to translate request: %w", errGemini)
 	}
+	translated := cloudcode.RequestEnvelope(geminiPayload)
 
 	baseURLs := antigravityBaseURLFallbackOrder(auth)
 	httpClient := executor.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
@@ -115,7 +118,16 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *provider.Auth, 
 			}
 		}
 
-		bodyBytes, errRead := io.ReadAll(httpResp.Body)
+		var reader io.ReadCloser = httpResp.Body
+		if httpResp.Header.Get("Content-Encoding") == "gzip" {
+			gzipReader, errGzip := gzip.NewReader(reader)
+			if errGzip == nil {
+				reader = gzipReader
+				defer gzipReader.Close()
+			}
+		}
+
+		bodyBytes, errRead := io.ReadAll(reader)
 		if errClose := httpResp.Body.Close(); errClose != nil {
 			log.Errorf("antigravity executor: close response body error: %v", errClose)
 		}
@@ -131,8 +143,11 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *provider.Auth, 
 		switch action {
 		case executor.RetryActionSuccess:
 			reporter.Publish(ctx, executor.ExtractUsageFromGeminiResponse(bodyBytes))
-			fromFormat := provider.FromString("gemini-cli")
-			translatedResp, errTranslateResp := stream.TranslateResponseNonStream(e.cfg, fromFormat, from, bodyBytes, req.Model)
+
+			// Unwrap envelope if present (Gemini CLI format)
+			cleanData := cloudcode.ResponseUnwrap(bodyBytes)
+
+			translatedResp, errTranslateResp := stream.TranslateResponseNonStream(e.cfg, provider.FormatGemini, from, cleanData, req.Model)
 			if errTranslateResp != nil {
 				return resp, fmt.Errorf("failed to translate response: %w", errTranslateResp)
 			}
@@ -189,11 +204,11 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *provider.
 
 	from := opts.SourceFormat
 
-	translation, errTranslate := stream.TranslateToGeminiCLIWithTokens(e.cfg, from, req.Model, req.Payload, true, req.Metadata)
+	translation, errTranslate := stream.TranslateToGeminiWithTokens(e.cfg, from, req.Model, req.Payload, true, req.Metadata)
 	if errTranslate != nil {
 		return nil, fmt.Errorf("failed to translate request: %w", errTranslate)
 	}
-	translated := translation.Payload
+	translated := cloudcode.RequestEnvelope(translation.Payload)
 	estimatedInputTokens := translation.EstimatedInputTokens
 
 	baseURLs := antigravityBaseURLFallbackOrder(auth)
@@ -282,12 +297,21 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *provider.
 		streamCtx.EstimatedInputTokens = estimatedInputTokens
 		messageID := "chatcmpl-" + req.Model
 
-		translator := stream.NewStreamTranslator(e.cfg, from, from.String(), req.Model, messageID, streamCtx)
-		processor := stream.NewGeminiCLIStreamProcessor(translator)
+		processor := stream.NewGeminiStreamProcessor(e.cfg, from, req.Model, messageID, streamCtx)
+
+		// Use GeminiPreprocessor with UnwrapEnvelope for envelope-wrapped responses
+		geminiPreprocessFn := stream.GeminiPreprocessor()
+		preprocessor := func(line []byte) ([]byte, bool) {
+			payload, skip := geminiPreprocessFn(line)
+			if skip || payload == nil {
+				return nil, true
+			}
+			return cloudcode.ResponseUnwrap(payload), false
+		}
 
 		streamChan = stream.RunSSEStream(ctx, httpResp.Body, reporter, processor, stream.StreamConfig{
 			ExecutorName:    "antigravity",
-			Preprocessor:    stream.GeminiPreprocessor(),
+			Preprocessor:    preprocessor,
 			EnsurePublished: true,
 		})
 		return streamChan, nil
@@ -326,10 +350,11 @@ func (e *AntigravityExecutor) CountTokens(ctx context.Context, auth *provider.Au
 	}
 
 	from := opts.SourceFormat
-	translated, errTranslate := stream.TranslateToGeminiCLI(e.cfg, from, req.Model, req.Payload, false, req.Metadata)
-	if errTranslate != nil {
-		return provider.Response{}, fmt.Errorf("failed to translate request: %w", errTranslate)
+	geminiPayload, errGemini := stream.TranslateToGemini(e.cfg, from, req.Model, req.Payload, false, req.Metadata)
+	if errGemini != nil {
+		return provider.Response{}, fmt.Errorf("failed to translate request: %w", errGemini)
 	}
+	translated := cloudcode.RequestEnvelope(geminiPayload)
 
 	translated = deleteJSONField(translated, "project")
 	translated = deleteJSONField(translated, "model")
