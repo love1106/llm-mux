@@ -196,11 +196,16 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *provider.Auth,
 	if err != nil {
 		return nil, err
 	}
+	modelForUpstream := req.Model
 	if modelOverride := e.resolveUpstreamModel(req.Model, auth); modelOverride != "" {
 		body, _ = sjson.SetBytes(body, "model", modelOverride)
+		modelForUpstream = modelOverride
 	}
 	body = e.injectThinkingConfig(req.Model, body)
-	body = checkSystemInstructions(body)
+	// Skip system instruction injection for haiku models (consistent with non-streaming path)
+	if !strings.HasPrefix(modelForUpstream, "claude-3-5-haiku") {
+		body = checkSystemInstructions(body)
+	}
 	body = e.ApplyPayloadConfig(req.Model, body)
 
 	body = ensureMaxTokensForThinking(req.Model, body)

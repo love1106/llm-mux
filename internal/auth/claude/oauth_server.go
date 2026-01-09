@@ -19,6 +19,7 @@ import (
 // OAuthServer handles the local HTTP server for OAuth callbacks.
 type OAuthServer struct {
 	server     *http.Server
+	listener   net.Listener
 	port       int
 	resultChan chan *OAuthResult
 	errorChan  chan error
@@ -62,17 +63,18 @@ func (s *OAuthServer) Start() error {
 		return fmt.Errorf("server is already running")
 	}
 
-	// Check if port is available
-	if !s.isPortAvailable() {
-		return fmt.Errorf("port %d is already in use", s.port)
+	addr := fmt.Sprintf(":%d", s.port)
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("port %d is already in use: %w", s.port, err)
 	}
+	s.listener = listener
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/callback", s.handleCallback)
 	mux.HandleFunc("/success", s.handleSuccess)
 
 	s.server = &http.Server{
-		Addr:         fmt.Sprintf(":%d", s.port),
 		Handler:      mux,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
@@ -80,15 +82,11 @@ func (s *OAuthServer) Start() error {
 
 	s.running = true
 
-	// Start server in goroutine
 	go func() {
-		if err := s.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			s.errorChan <- fmt.Errorf("server failed to start: %w", err)
+		if err := s.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			s.errorChan <- fmt.Errorf("server error: %w", err)
 		}
 	}()
-
-	// Give server a moment to start
-	time.Sleep(100 * time.Millisecond)
 
 	return nil
 }
@@ -110,13 +108,13 @@ func (s *OAuthServer) Stop(ctx context.Context) error {
 
 	log.Debug("Stopping OAuth callback server")
 
-	// Create a context with timeout for shutdown
 	shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	err := s.server.Shutdown(shutdownCtx)
 	s.running = false
 	s.server = nil
+	s.listener = nil
 
 	return err
 }
@@ -269,22 +267,6 @@ func (s *OAuthServer) sendResult(result *OAuthResult) {
 	default:
 		log.Warn("OAuth result channel is full, result dropped")
 	}
-}
-
-// isPortAvailable checks if the specified port is available.
-// It attempts to listen on the port to determine availability.
-// Returns:
-//   - bool: True if the port is available, false otherwise
-func (s *OAuthServer) isPortAvailable() bool {
-	addr := fmt.Sprintf(":%d", s.port)
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		return false
-	}
-	defer func() {
-		_ = listener.Close()
-	}()
-	return true
 }
 
 // IsRunning returns whether the server is currently running.

@@ -176,7 +176,10 @@ func isQuotaError(msg string) bool {
 	return strings.Contains(lower, "resource_exhausted") ||
 		strings.Contains(lower, "quota") ||
 		strings.Contains(lower, "rate limit") ||
-		strings.Contains(lower, "too many requests")
+		strings.Contains(lower, "rate_limit_error") ||
+		strings.Contains(lower, "too many requests") ||
+		strings.Contains(lower, "credit balance is too low") ||
+		strings.Contains(lower, "overloaded_error")
 }
 
 func isContextCanceledError(msg string) bool {
