@@ -22,7 +22,7 @@ function App() {
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
-        <BrowserRouter basename="/ui">
+        <BrowserRouter>
           <Routes>
             <Route element={<MainLayout />}>
               <Route path="/" element={<DashboardPage />} />

@@ -4,9 +4,9 @@ import path from 'path'
 
 export default defineConfig({
   plugins: [react()],
-  base: '/ui/',
+  base: '/',
   build: {
-    outDir: '../dist-ui',
+    outDir: 'dist',
     emptyOutDir: true,
     rollupOptions: {
       output: {
@@ -23,6 +23,16 @@ export default defineConfig({
     },
   },
   server: {
+    port: 8318,
+    proxy: {
+      '/v1/management': {
+        target: 'http://localhost:8317',
+        changeOrigin: true,
+      }
+    }
+  },
+  preview: {
+    port: 8318,
     proxy: {
       '/v1/management': {
         target: 'http://localhost:8317',
