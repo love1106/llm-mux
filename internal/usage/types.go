@@ -120,6 +120,7 @@ func (m *Manager) Register(plugin Plugin) {
 // the record will be discarded downstream.
 func (m *Manager) Publish(ctx context.Context, record Record) {
 	if m == nil {
+		log.Debugf("usage: manager is nil, cannot publish")
 		return
 	}
 	// ensure worker is running even if Start was not called explicitly
@@ -127,11 +128,14 @@ func (m *Manager) Publish(ctx context.Context, record Record) {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
+		log.Debugf("usage: manager closed, dropping record")
 		return
 	}
 	m.queue = append(m.queue, queueItem{ctx: ctx, record: record})
+	queueLen := len(m.queue)
 	m.mu.Unlock()
 	m.cond.Signal()
+	log.Infof("usage: published record for %s/%s, queue len=%d", record.Provider, record.Model, queueLen)
 }
 
 func (m *Manager) run(ctx context.Context) {
@@ -157,8 +161,10 @@ func (m *Manager) dispatch(item queueItem) {
 	copy(plugins, m.plugins)
 	m.pluginsMu.RUnlock()
 	if len(plugins) == 0 {
+		log.Debugf("usage: no plugins registered, dropping record")
 		return
 	}
+	log.Debugf("usage: dispatching to %d plugins", len(plugins))
 	for _, plugin := range plugins {
 		if plugin == nil {
 			continue
@@ -185,7 +191,10 @@ func DefaultManager() *Manager { return defaultUsageManager }
 func RegisterPlugin(plugin Plugin) { DefaultManager().Register(plugin) }
 
 // PublishRecord publishes a record using the default manager.
-func PublishRecord(ctx context.Context, record Record) { DefaultManager().Publish(ctx, record) }
+func PublishRecord(ctx context.Context, record Record) {
+	log.Infof("usage: PublishRecord called for %s/%s", record.Provider, record.Model)
+	DefaultManager().Publish(ctx, record)
+}
 
 // StartDefault starts the default manager's dispatcher.
 func StartDefault(ctx context.Context) { DefaultManager().Start(ctx) }

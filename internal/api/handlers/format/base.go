@@ -6,13 +6,17 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/nghyane/llm-mux/internal/config"
 	"github.com/nghyane/llm-mux/internal/interfaces"
 	"github.com/nghyane/llm-mux/internal/provider"
 	"github.com/nghyane/llm-mux/internal/registry"
+	"github.com/nghyane/llm-mux/internal/translator/ir"
+	"github.com/nghyane/llm-mux/internal/usage"
 	"github.com/nghyane/llm-mux/internal/util"
+	"github.com/tidwall/gjson"
 )
 
 type ErrorResponse struct {
@@ -159,8 +163,10 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 		return nil, errMsg
 	}
 	req, opts := buildRequestOpts(normalizedModel, rawJSON, metadata, handlerType, alt, false)
+	requestedAt := time.Now()
 	resp, err := h.AuthManager.Execute(ctx, providers, req, opts)
 	if err == nil {
+		h.publishUsageFromResponse(ctx, providers, normalizedModel, resp.Payload, requestedAt)
 		return resp.Payload, nil
 	}
 
@@ -171,8 +177,10 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 			continue
 		}
 		fbReq, fbOpts := buildRequestOpts(fbNormalizedModel, rawJSON, fbMetadata, handlerType, alt, false)
+		fbRequestedAt := time.Now()
 		fbResp, fbErr := h.AuthManager.Execute(ctx, fbProviders, fbReq, fbOpts)
 		if fbErr == nil {
+			h.publishUsageFromResponse(ctx, fbProviders, fbNormalizedModel, fbResp.Payload, fbRequestedAt)
 			return fbResp.Payload, nil
 		}
 	}
@@ -414,4 +422,34 @@ func (s *SSEWriter) Err() error {
 // Ok returns true if no write errors have occurred.
 func (s *SSEWriter) Ok() bool {
 	return s.err == nil
+}
+
+func (h *BaseAPIHandler) publishUsageFromResponse(ctx context.Context, providers []string, model string, payload []byte, requestedAt time.Time) {
+	usageData := gjson.GetBytes(payload, "usage")
+	if !usageData.Exists() {
+		return
+	}
+	promptTokens := usageData.Get("prompt_tokens").Int()
+	completionTokens := usageData.Get("completion_tokens").Int()
+	totalTokens := usageData.Get("total_tokens").Int()
+	if totalTokens == 0 && promptTokens == 0 && completionTokens == 0 {
+		return
+	}
+
+	provider := ""
+	if len(providers) > 0 {
+		provider = providers[0]
+	}
+
+	usage.PublishRecord(ctx, usage.Record{
+		Provider:    provider,
+		Model:       model,
+		RequestedAt: requestedAt,
+		Failed:      false,
+		Usage: &ir.Usage{
+			PromptTokens:     promptTokens,
+			CompletionTokens: completionTokens,
+			TotalTokens:      totalTokens,
+		},
+	})
 }

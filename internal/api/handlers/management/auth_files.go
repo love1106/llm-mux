@@ -165,6 +165,28 @@ func (h *Handler) enrichWithQuotaState(entry gin.H, authID string, qm *provider.
 		qs["last_exhausted_at"] = state.LastExhaustedAt
 	}
 
+	if state.RealQuota != nil {
+		realQuota := gin.H{}
+		if state.RealQuota.RemainingFraction > 0 {
+			realQuota["remaining_fraction"] = state.RealQuota.RemainingFraction
+		}
+		if state.RealQuota.RemainingTokens > 0 {
+			realQuota["remaining_tokens"] = state.RealQuota.RemainingTokens
+		}
+		if !state.RealQuota.WindowResetAt.IsZero() {
+			realQuota["window_reset_at"] = state.RealQuota.WindowResetAt
+			if state.RealQuota.WindowResetAt.After(now) {
+				realQuota["reset_in_seconds"] = int64(state.RealQuota.WindowResetAt.Sub(now).Seconds())
+			}
+		}
+		if !state.RealQuota.FetchedAt.IsZero() {
+			realQuota["fetched_at"] = state.RealQuota.FetchedAt
+		}
+		if len(realQuota) > 0 {
+			qs["real_quota"] = realQuota
+		}
+	}
+
 	entry["quota_state"] = qs
 }
 
@@ -245,6 +267,9 @@ func (h *Handler) buildAuthFileEntry(auth *provider.Auth) gin.H {
 			entry["account"] = account
 		}
 	}
+	if subType := authSubscriptionType(auth); subType != "" {
+		entry["subscription_type"] = subType
+	}
 	if !auth.CreatedAt.IsZero() {
 		entry["created_at"] = auth.CreatedAt
 	}
@@ -289,6 +314,18 @@ func authEmail(auth *provider.Auth) string {
 		}
 		if v := strings.TrimSpace(auth.Attributes["account_email"]); v != "" {
 			return v
+		}
+	}
+	return ""
+}
+
+func authSubscriptionType(auth *provider.Auth) string {
+	if auth == nil {
+		return ""
+	}
+	if auth.Metadata != nil {
+		if v, ok := auth.Metadata["subscription_type"].(string); ok {
+			return strings.TrimSpace(v)
 		}
 	}
 	return ""

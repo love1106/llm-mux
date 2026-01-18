@@ -24,6 +24,24 @@ export interface ApiResponse<T> {
   }
 }
 
+export interface QuotaState {
+  active_requests: number
+  total_tokens_used: number
+  in_cooldown: boolean
+  cooldown_until?: string
+  cooldown_remaining_seconds?: number
+  learned_limit?: number
+  learned_cooldown_seconds?: number
+  last_exhausted_at?: string
+  real_quota?: {
+    remaining_fraction?: number
+    remaining_tokens?: number
+    window_reset_at?: string
+    reset_in_seconds?: number
+    fetched_at?: string
+  }
+}
+
 export interface AuthFile {
   id: string
   name: string
@@ -32,10 +50,12 @@ export interface AuthFile {
   label: string
   email?: string
   account_type?: string
+  subscription_type?: string
   status: 'active' | 'disabled' | 'error' | 'cooling' | 'unavailable'
   status_message?: string
   disabled: boolean
   last_refresh?: string
+  quota_state?: QuotaState
 }
 
 export interface UsageStats {
@@ -48,9 +68,11 @@ export interface UsageStats {
       input: number
       output: number
     }
+    cost_usd: number
   }
-  by_provider: Record<string, { requests: number; tokens: { total: number } }>
-  by_account: Record<string, { requests: number; tokens: { total: number } }>
+  by_provider: Record<string, { requests: number; tokens: { total: number; input: number; output: number }; cost_usd: number }>
+  by_account: Record<string, { provider: string; auth_id: string; requests: number; tokens: { total: number; input: number; output: number } }>
+  by_model: Record<string, { provider: string; requests: number; tokens: { total: number; input: number; output: number }; cost_usd: number }>
   timeline?: {
     by_day: Array<{ day: string; requests: number; tokens: number }>
   }

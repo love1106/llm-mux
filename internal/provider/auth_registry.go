@@ -562,7 +562,7 @@ func (r *AuthRegistry) doRefresh(authID string) {
 			}
 
 			r.markDirty(authID)
-			log.Debugf("auth_registry: refreshed %s", authID)
+			log.Infof("auth_registry: token refreshed for %s", authID)
 
 			if r.hook != nil {
 				go r.hook.OnAuthUpdated(context.Background(), entry.ToAuth())

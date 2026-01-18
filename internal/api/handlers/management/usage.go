@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	log "github.com/nghyane/llm-mux/internal/logging"
+	"github.com/nghyane/llm-mux/internal/usage"
 )
 
 func (h *Handler) GetUsageStatistics(c *gin.Context) {
@@ -103,7 +104,10 @@ func (h *Handler) GetUsageStatistics(c *gin.Context) {
 		log.Warnf("usage: failed to query model stats: %v", err)
 	} else if len(modelStats) > 0 {
 		byModel := make(map[string]UsageModelStats, len(modelStats))
+		var totalCost float64
 		for _, ms := range modelStats {
+			modelCost := usage.CalculateCostUSD(ms.Model, ms.InputTokens, ms.OutputTokens, 0)
+			totalCost += modelCost
 			byModel[ms.Model] = UsageModelStats{
 				Provider: ms.Provider,
 				Requests: ms.Requests,
@@ -115,9 +119,11 @@ func (h *Handler) GetUsageStatistics(c *gin.Context) {
 					Output:    ms.OutputTokens,
 					Reasoning: ms.ReasoningTokens,
 				},
+				CostUSD: modelCost,
 			}
 		}
 		response.ByModel = byModel
+		response.Summary.CostUSD = totalCost
 	}
 
 	timeline := &UsageTimeline{}

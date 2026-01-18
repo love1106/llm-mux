@@ -104,6 +104,7 @@ type AuthQuotaStateSnapshot struct {
 	LastExhaustedAt time.Time
 	LearnedLimit    int64
 	LearnedCooldown time.Duration
+	RealQuota       *RealQuotaSnapshot
 }
 
 // Snapshot creates a point-in-time snapshot of the state.
@@ -115,6 +116,7 @@ func (s *AuthQuotaState) Snapshot() *AuthQuotaStateSnapshot {
 		LastExhaustedAt: s.GetLastExhaustedAt(),
 		LearnedLimit:    s.LearnedLimit.Load(),
 		LearnedCooldown: s.GetLearnedCooldown(),
+		RealQuota:       s.GetRealQuota(),
 	}
 }
 

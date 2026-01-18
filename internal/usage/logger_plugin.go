@@ -42,11 +42,14 @@ func NewLoggerPlugin(backend Backend) *LoggerPlugin {
 // It updates lock-free counters and enqueues records to the backend.
 func (p *LoggerPlugin) HandleUsage(ctx context.Context, record Record) {
 	if !statisticsEnabled.Load() {
+		log.Debugf("usage: statistics disabled, skipping record")
 		return
 	}
 	if p == nil {
+		log.Debugf("usage: plugin is nil, skipping record")
 		return
 	}
+	log.Infof("usage: HandleUsage called for %s/%s tokens=%d", record.Provider, record.Model, record.Usage.TotalTokens)
 
 	timestamp := record.RequestedAt
 	if timestamp.IsZero() {

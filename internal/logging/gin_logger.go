@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -11,8 +12,14 @@ import (
 
 func GinLogrusLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		start := time.Now()
 		path := c.Request.URL.Path
+
+		if strings.HasPrefix(path, "/v1/management") || strings.HasPrefix(path, "/v0/management") || strings.HasPrefix(path, "/management") {
+			c.Next()
+			return
+		}
+
+		start := time.Now()
 		raw := maskSensitiveQuery(c.Request.URL.RawQuery)
 
 		c.Next()

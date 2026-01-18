@@ -18,6 +18,7 @@ type UsageSummary struct {
 	SuccessCount  int64        `json:"success_count"`
 	FailureCount  int64        `json:"failure_count"`
 	Tokens        TokenSummary `json:"tokens"`
+	CostUSD       float64      `json:"cost_usd"`
 }
 
 // TokenSummary holds token breakdown.
@@ -34,6 +35,7 @@ type UsageProviderStats struct {
 	Success      int64        `json:"success"`
 	Failure      int64        `json:"failure"`
 	Tokens       TokenSummary `json:"tokens"`
+	CostUSD      float64      `json:"cost_usd"`
 	AccountCount int64        `json:"accounts"`
 	Models       []string     `json:"models,omitempty"`
 }
@@ -55,6 +57,7 @@ type UsageModelStats struct {
 	Success  int64        `json:"success"`
 	Failure  int64        `json:"failure"`
 	Tokens   TokenSummary `json:"tokens"`
+	CostUSD  float64      `json:"cost_usd"`
 }
 
 // UsageTimeline holds time-series usage data.

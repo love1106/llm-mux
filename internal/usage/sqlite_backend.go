@@ -244,10 +244,10 @@ func (b *SQLiteBackend) Flush(ctx context.Context) error {
 // QueryGlobalStats returns aggregate statistics since the given time.
 func (b *SQLiteBackend) QueryGlobalStats(ctx context.Context, since time.Time) (*AggregatedStats, error) {
 	row := b.db.QueryRowContext(ctx, `
-		SELECT 
-			COUNT(*),
-			SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END),
-			SUM(CASE WHEN failed = 1 THEN 1 ELSE 0 END),
+		SELECT
+			COALESCE(COUNT(*), 0),
+			COALESCE(SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN failed = 1 THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(total_tokens), 0)
 		FROM usage_records
 		WHERE requested_at >= ?
@@ -296,13 +296,13 @@ func (b *SQLiteBackend) QueryDailyStats(ctx context.Context, since time.Time) ([
 // QueryHourlyStats returns per-hour-of-day statistics since the given time.
 func (b *SQLiteBackend) QueryHourlyStats(ctx context.Context, since time.Time) ([]HourlyStats, error) {
 	rows, err := b.db.QueryContext(ctx, `
-		SELECT 
-			CAST(strftime('%H', requested_at) AS INTEGER) as hour,
+		SELECT
+			COALESCE(CAST(strftime('%H', requested_at) AS INTEGER), 0) as hour,
 			COUNT(*) as requests,
 			COALESCE(SUM(total_tokens), 0) as tokens
 		FROM usage_records
 		WHERE requested_at >= ?
-		GROUP BY hour
+		GROUP BY strftime('%H', requested_at)
 		ORDER BY hour
 	`, since)
 	if err != nil {

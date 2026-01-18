@@ -19,10 +19,11 @@ import (
 )
 
 const (
-	anthropicAuthURL  = "https://claude.ai/oauth/authorize"
-	anthropicTokenURL = "https://console.anthropic.com/v1/oauth/token"
-	anthropicClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-	redirectURI       = "http://localhost:54545/callback"
+	anthropicAuthURL           = "https://claude.ai/oauth/authorize"
+	anthropicTokenURL          = "https://console.anthropic.com/v1/oauth/token"
+	anthropicOrganizationsURL  = "https://api.claude.ai/api/organizations"
+	anthropicClientID          = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+	redirectURI                = "http://localhost:54545/callback"
 )
 
 // tokenResponse represents the response structure from Anthropic's OAuth token endpoint.
@@ -309,4 +310,90 @@ func (o *ClaudeAuth) UpdateTokenStorage(storage *ClaudeTokenStorage, tokenData *
 	storage.LastRefresh = time.Now().Format(time.RFC3339)
 	storage.Email = tokenData.Email
 	storage.Expire = tokenData.Expire
+}
+
+// OrganizationInfo represents the organization information from Claude API
+type OrganizationInfo struct {
+	UUID               string   `json:"uuid"`
+	Name               string   `json:"name"`
+	Capabilities       []string `json:"capabilities"`
+	ActiveSubscription *struct {
+		Tier string `json:"tier"`
+	} `json:"activeSubscription"`
+	RateLimitTier string `json:"rateLimitTier"`
+}
+
+// FetchOrganizations fetches organization information to determine subscription type.
+// Parameters:
+//   - ctx: The context for the request
+//   - accessToken: The access token to use for authentication
+//
+// Returns:
+//   - []OrganizationInfo: List of organizations with subscription info
+//   - error: An error if the request fails
+func (o *ClaudeAuth) FetchOrganizations(ctx context.Context, accessToken string) ([]OrganizationInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", anthropicOrganizationsURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create organizations request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := o.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("organizations request failed: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read organizations response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		log.Warnf("Organizations API returned %d: %s", resp.StatusCode, string(body))
+		return nil, nil
+	}
+
+	var orgs []OrganizationInfo
+	if err = json.Unmarshal(body, &orgs); err != nil {
+		return nil, fmt.Errorf("failed to parse organizations response: %w", err)
+	}
+
+	return orgs, nil
+}
+
+// DetermineSubscriptionType determines the subscription type from organization info.
+// Returns "pro", "free", "team", etc.
+func DetermineSubscriptionType(orgs []OrganizationInfo) string {
+	if len(orgs) == 0 {
+		return "unknown"
+	}
+
+	for _, org := range orgs {
+		if org.ActiveSubscription != nil && org.ActiveSubscription.Tier != "" {
+			return org.ActiveSubscription.Tier
+		}
+
+		for _, cap := range org.Capabilities {
+			switch cap {
+			case "pro":
+				return "pro"
+			case "team":
+				return "team"
+			case "enterprise":
+				return "enterprise"
+			}
+		}
+
+		if org.RateLimitTier != "" {
+			return org.RateLimitTier
+		}
+	}
+
+	return "free"
 }

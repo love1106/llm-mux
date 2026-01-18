@@ -584,7 +584,20 @@ func (h *Handler) exchangeClaudeCode(ctx context.Context, state, code string) (*
 	storage := claudeAuth.CreateTokenStorage(bundle)
 	email := strings.TrimSpace(storage.Email)
 
-	return buildAuthRecordWithEmail("claude", email, storage, nil), nil
+	orgs, err := claudeAuth.FetchOrganizations(ctx, storage.AccessToken)
+	if err != nil {
+		log.WithError(err).Warn("Failed to fetch organizations for subscription type")
+	} else {
+		storage.SubscriptionType = claude.DetermineSubscriptionType(orgs)
+		log.WithField("subscription", storage.SubscriptionType).Info("Detected Claude subscription type")
+	}
+
+	extraMeta := map[string]any{}
+	if storage.SubscriptionType != "" {
+		extraMeta["subscription_type"] = storage.SubscriptionType
+	}
+
+	return buildAuthRecordWithEmail("claude", email, storage, extraMeta), nil
 }
 
 func (h *Handler) exchangeCodexCode(ctx context.Context, state, code string) (*provider.Auth, error) {

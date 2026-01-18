@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	log "github.com/nghyane/llm-mux/internal/logging"
 	"github.com/nghyane/llm-mux/internal/provider"
 	"github.com/nghyane/llm-mux/internal/translator/ir"
 	"github.com/nghyane/llm-mux/internal/translator/to_ir"
@@ -103,11 +104,14 @@ func (r *usageReporter) publishWithOutcome(ctx context.Context, u *ir.Usage, fai
 		return
 	}
 	if u == nil && !failed {
+		log.Debugf("usage_reporter: usage is nil and not failed, skipping")
 		return
 	}
 	if u != nil && u.TotalTokens == 0 && u.PromptTokens == 0 && u.CompletionTokens == 0 && !failed {
+		log.Debugf("usage_reporter: zero tokens and not failed, skipping")
 		return
 	}
+	log.Infof("usage_reporter: publishing usage for %s/%s, tokens=%d", r.provider, r.model, u.TotalTokens)
 	r.once.Do(func() {
 		usage.PublishRecord(ctx, usage.Record{
 			Provider:    r.provider,

@@ -45,5 +45,5 @@ COPY --from=builder --chown=llm-mux:llm-mux /build/llm-mux ./
 USER llm-mux
 ENV TZ=UTC
 EXPOSE 8317
-
+EXPOSE 8318
 CMD ["./llm-mux", "serve"]

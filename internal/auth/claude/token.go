@@ -14,13 +14,14 @@ import (
 
 // ClaudeTokenStorage stores OAuth2 token information for Anthropic Claude API authentication.
 type ClaudeTokenStorage struct {
-	IDToken      string `json:"id_token"`
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	LastRefresh  string `json:"last_refresh"`
-	Email        string `json:"email"`
-	Type         string `json:"type"`
-	Expire       string `json:"expired"`
+	IDToken          string `json:"id_token"`
+	AccessToken      string `json:"access_token"`
+	RefreshToken     string `json:"refresh_token"`
+	LastRefresh      string `json:"last_refresh"`
+	Email            string `json:"email"`
+	Type             string `json:"type"`
+	Expire           string `json:"expired"`
+	SubscriptionType string `json:"subscription_type,omitempty"`
 }
 
 // SaveTokenToFile serializes the Claude token storage to a JSON file.
