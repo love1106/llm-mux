@@ -1,5 +1,5 @@
 # Stage 1: Build stage
-FROM golang:1.25-alpine AS builder
+FROM golang:1.23-alpine AS builder
 
 WORKDIR /build
 
@@ -29,7 +29,7 @@ LABEL org.opencontainers.image.title="llm-mux" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${COMMIT}" \
       org.opencontainers.image.created="${BUILD_DATE}" \
-      org.opencontainers.image.source="https://github.com/nghyane/llm-mux"
+      org.opencontainers.image.source="https://github.com/love1106/llm-mux"
 
 RUN apk add --no-cache tzdata ca-certificates
 
