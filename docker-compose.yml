@@ -1,6 +1,6 @@
 services:
   llm-mux:
-    image: ${LLM_MUX_IMAGE:-nghyane/llm-mux:latest}
+    image: ${LLM_MUX_IMAGE:-nguyenkhoi1610/public-llm-mux:latest}
     pull_policy: always
     build:
       context: .
@@ -12,11 +12,13 @@ services:
     container_name: llm-mux
     command: ["./llm-mux", "serve", "--config", "/llm-mux/config.yaml"]
     environment:
-      TZ: ${TZ:-UTC}
+      TZ: Asia/Ho_Chi_Minh
     ports:
       - "8317:8317"
+      - "8318:8318"
     volumes:
       - ./config.yaml:/llm-mux/config.yaml
       - ./auths:/llm-mux/auth
       - ./logs:/llm-mux/logs
+      - ./data:/llm-mux/data
     restart: unless-stopped

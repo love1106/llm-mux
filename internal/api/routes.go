@@ -219,9 +219,8 @@ func AuthMiddleware(manager *access.Manager) gin.HandlerFunc {
 			return
 		}
 
-		// Allow requests without credentials (Ollama compatibility)
 		if errors.Is(err, access.ErrNoCredentials) {
-			c.Next()
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "API key required"})
 			return
 		}
 
