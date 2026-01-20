@@ -70,6 +70,15 @@ export function AccountsPage() {
     onError: () => toast.error('Failed to delete account'),
   })
 
+  const refreshMutation = useMutation({
+    mutationFn: (id: string) => managementApi.refreshAuthFile(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['auth-files'] })
+      toast.success('Token refresh triggered')
+    },
+    onError: () => toast.error('Failed to refresh token'),
+  })
+
   const resetOauthState = () => {
     setOauthState(null)
     setOauthStatus('idle')
@@ -231,18 +240,30 @@ export function AccountsPage() {
                         {account.status}
                       </Badge>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        if (confirm('Delete this account?')) {
-                          deleteMutation.mutate(account.name)
-                        }
-                      }}
-                      disabled={deleteMutation.isPending}
-                    >
-                      <Trash2 className="h-4 w-4 text-destructive" />
-                    </Button>
+                    <div className="flex gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => refreshMutation.mutate(account.name)}
+                        disabled={refreshMutation.isPending}
+                        title="Refresh token"
+                      >
+                        <RefreshCw className={`h-4 w-4 ${refreshMutation.isPending ? 'animate-spin' : ''}`} />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          if (confirm('Delete this account?')) {
+                            deleteMutation.mutate(account.name)
+                          }
+                        }}
+                        disabled={deleteMutation.isPending}
+                        title="Delete account"
+                      >
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                      </Button>
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent>

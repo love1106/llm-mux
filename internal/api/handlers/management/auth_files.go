@@ -550,6 +550,33 @@ func (h *Handler) DeleteAuthFile(c *gin.Context) {
 	respondOK(c, gin.H{"status": "ok"})
 }
 
+// RefreshAuthFile triggers a manual token refresh for the specified auth.
+func (h *Handler) RefreshAuthFile(c *gin.Context) {
+	log.Infof("RefreshAuthFile handler called")
+	if h.authManager == nil {
+		log.Warnf("RefreshAuthFile: authManager is nil")
+		respondError(c, http.StatusServiceUnavailable, ErrCodeInternalError, "core auth manager unavailable")
+		return
+	}
+	ctx := c.Request.Context()
+	id := c.Query("id")
+	if id == "" {
+		id = c.Query("name")
+	}
+	if id == "" {
+		respondBadRequest(c, "id or name is required")
+		return
+	}
+	log.Infof("RefreshAuthFile: calling RefreshAuthByID for id=%s", id)
+	if err := h.authManager.RefreshAuthByID(ctx, id); err != nil {
+		log.Warnf("RefreshAuthFile: error from RefreshAuthByID: %v", err)
+		respondError(c, http.StatusNotFound, ErrCodeNotFound, err.Error())
+		return
+	}
+	log.Infof("RefreshAuthFile: refresh triggered successfully for id=%s", id)
+	respondOK(c, gin.H{"status": "ok", "message": "refresh triggered"})
+}
+
 func (h *Handler) authIDForPath(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {

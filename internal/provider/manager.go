@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -829,9 +830,15 @@ func (m *Manager) refreshAuth(ctx context.Context, id string) {
 		exec = m.executors[auth.Provider]
 	}
 	m.mu.RUnlock()
-	if auth == nil || exec == nil {
+	if auth == nil {
+		log.Warnf("refreshAuth: auth not found for id=%s", id)
 		return
 	}
+	if exec == nil {
+		log.Warnf("refreshAuth: executor not found for provider=%s id=%s", auth.Provider, id)
+		return
+	}
+	log.Infof("refreshAuth: starting refresh for provider=%s id=%s metadata_keys=%v", auth.Provider, id, metadataKeys(auth.Metadata))
 	cloned := auth.Clone()
 	authUpdatedAt := auth.UpdatedAt
 	updated, err := exec.Refresh(ctx, cloned)
@@ -873,6 +880,43 @@ func (m *Manager) refreshAuth(ctx context.Context, id string) {
 	updated.LastError = nil
 	updated.UpdatedAt = now
 	_, _ = m.Update(ctx, updated)
+}
+
+// RefreshAuthByID triggers a manual refresh for the auth with the given ID or FileName.
+// Returns error if auth not found or refresh fails.
+func (m *Manager) RefreshAuthByID(ctx context.Context, id string) error {
+	log.Infof("RefreshAuthByID called with id=%s", id)
+	m.mu.RLock()
+	auth := m.auths[id]
+	if auth == nil {
+		log.Debugf("RefreshAuthByID: direct lookup failed, searching by FileName")
+		for _, a := range m.auths {
+			if a.FileName == id || a.ID == id {
+				auth = a
+				log.Debugf("RefreshAuthByID: found auth by FileName=%s or ID=%s", a.FileName, a.ID)
+				break
+			}
+		}
+	}
+	m.mu.RUnlock()
+	if auth == nil {
+		log.Warnf("RefreshAuthByID: auth not found for id=%s", id)
+		return fmt.Errorf("auth not found: %s", id)
+	}
+	log.Infof("RefreshAuthByID: calling refreshAuth for auth.ID=%s", auth.ID)
+	m.refreshAuth(ctx, auth.ID)
+	return nil
+}
+
+func metadataKeys(m map[string]any) []string {
+	if m == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 func (m *Manager) executorFor(provider string) ProviderExecutor {

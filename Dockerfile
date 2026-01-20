@@ -84,5 +84,6 @@ USER llm-mux
 ENV TZ=Asia/Ho_Chi_Minh
 EXPOSE 8317
 EXPOSE 8318
+EXPOSE 54545
 ENTRYPOINT ["/llm-mux/entrypoint.sh"]
 CMD []

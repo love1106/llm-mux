@@ -16,6 +16,7 @@ services:
     ports:
       - "8317:8317"
       - "8318:8318"
+      - "54545:54545"
     volumes:
       - ./config.yaml:/llm-mux/config.yaml
       - ./auths:/llm-mux/auth

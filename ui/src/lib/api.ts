@@ -85,6 +85,7 @@ export const managementApi = {
 
   getAuthFiles: () => api.get<ApiResponse<{ files: AuthFile[] }>>('/auth-files'),
   deleteAuthFile: (name: string) => api.delete('/auth-files', { params: { name } }),
+  refreshAuthFile: (id: string) => api.post<ApiResponse<{ status: string; message: string }>>('/auth-files/refresh', null, { params: { id } }),
 
   getUsage: (params?: { days?: number; from?: string; to?: string }) =>
     api.get<ApiResponse<UsageStats>>('/usage', { params }),
