@@ -432,8 +432,12 @@ func (s *GitTokenStore) readAuthFile(path, baseDir string) (*provider.Auth, erro
 		return nil, fmt.Errorf("unmarshal auth json: %w", err)
 	}
 	providerName, _ := metadata["type"].(string)
+	providerName = strings.ToLower(strings.TrimSpace(providerName))
 	if providerName == "" {
 		providerName = "unknown"
+	}
+	if providerName == "gemini" {
+		providerName = "gemini-cli"
 	}
 	info, err := os.Stat(path)
 	if err != nil {

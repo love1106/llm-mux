@@ -4,7 +4,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Progress } from '@/components/ui/progress'
 import { managementApi, type AuthFile } from '@/lib/api'
 import { toast } from '@/components/ui/toast'
@@ -19,6 +18,10 @@ import {
   Loader2,
   ExternalLink,
   Zap,
+  FileJson,
+  Copy,
+  Check,
+  Upload,
 } from 'lucide-react'
 
 const CLAUDE_DAILY_LIMIT = 45_000_000
@@ -39,7 +42,15 @@ const providerColors: Record<string, string> = {
   anthropic: 'bg-purple-600',
 }
 
-const PROVIDERS = ['claude', 'gemini', 'openai']
+const OAUTH_PROVIDERS = [
+  { id: 'claude', name: 'Claude', description: 'Anthropic Claude Pro/Max', icon: '🟣', flowType: 'oauth' },
+  { id: 'gemini', name: 'Gemini', description: 'Google Gemini CLI', icon: '🔵', flowType: 'oauth' },
+  { id: 'antigravity', name: 'Antigravity', description: 'Google Cloud AI Companion', icon: '🌐', flowType: 'oauth' },
+  { id: 'copilot', name: 'GitHub Copilot', description: 'GitHub Copilot subscription', icon: '🐙', flowType: 'device' },
+  { id: 'qwen', name: 'Qwen', description: 'Alibaba Qwen', icon: '🟠', flowType: 'device' },
+  { id: 'codex', name: 'Codex', description: 'OpenAI Codex CLI', icon: '🟢', flowType: 'oauth' },
+  { id: 'iflow', name: 'iFlow', description: 'iFlow AI', icon: '⚡', flowType: 'oauth' },
+]
 
 export function AccountsPage() {
   const queryClient = useQueryClient()
@@ -48,6 +59,14 @@ export function AccountsPage() {
   const [oauthState, setOauthState] = useState<string | null>(null)
   const [oauthStatus, setOauthStatus] = useState<'idle' | 'pending' | 'success' | 'error'>('idle')
   const [authUrl, setAuthUrl] = useState<string | null>(null)
+  const [deviceCode, setDeviceCode] = useState<{ userCode: string; verificationUrl: string } | null>(null)
+  const [jsonDialogOpen, setJsonDialogOpen] = useState(false)
+  const [jsonContent, setJsonContent] = useState<string>('')
+  const [jsonFileName, setJsonFileName] = useState<string>('')
+  const [copied, setCopied] = useState(false)
+  const [addMode, setAddMode] = useState<'oauth' | 'import'>('oauth')
+  const [importJson, setImportJson] = useState('')
+  const [isImporting, setIsImporting] = useState(false)
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['auth-files'],
@@ -83,18 +102,74 @@ export function AccountsPage() {
     setOauthState(null)
     setOauthStatus('idle')
     setAuthUrl(null)
+    setDeviceCode(null)
     setSelectedProvider('')
+    setAddMode('oauth')
+    setImportJson('')
+  }
+
+  const handleImportJson = async () => {
+    if (!importJson.trim()) {
+      toast.error('Please paste JSON content')
+      return
+    }
+    try {
+      JSON.parse(importJson)
+    } catch {
+      toast.error('Invalid JSON format')
+      return
+    }
+    setIsImporting(true)
+    try {
+      await managementApi.importRawJSON(importJson)
+      toast.success('Account imported successfully')
+      queryClient.invalidateQueries({ queryKey: ['auth-files'] })
+      setOauthDialogOpen(false)
+      resetOauthState()
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error?.message || 'Failed to import account')
+    } finally {
+      setIsImporting(false)
+    }
+  }
+
+  const viewJson = async (name: string) => {
+    try {
+      const response = await managementApi.getAuthFileContent(name)
+      setJsonContent(JSON.stringify(response.data, null, 2))
+      setJsonFileName(name)
+      setJsonDialogOpen(true)
+      setCopied(false)
+    } catch {
+      toast.error('Failed to load auth file')
+    }
+  }
+
+  const copyJson = async () => {
+    try {
+      await navigator.clipboard.writeText(jsonContent)
+      setCopied(true)
+      toast.success('Copied to clipboard')
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      toast.error('Failed to copy')
+    }
   }
 
   const startOAuth = async () => {
     if (!selectedProvider) return
     try {
       const response = await managementApi.oauthStart(selectedProvider)
-      if (response.data.auth_url) {
-        setAuthUrl(response.data.auth_url)
-        setOauthState(response.data.state)
-        setOauthStatus('pending')
-        window.open(response.data.auth_url, '_blank')
+      const data = response.data as any
+      setOauthState(data.state)
+      setOauthStatus('pending')
+
+      if (data.flow_type === 'device' && data.user_code) {
+        setDeviceCode({ userCode: data.user_code, verificationUrl: data.auth_url || data.verification_url })
+        window.open(data.auth_url || data.verification_url, '_blank')
+      } else if (data.auth_url) {
+        setAuthUrl(data.auth_url)
+        window.open(data.auth_url, '_blank')
       }
     } catch {
       toast.error('Failed to start OAuth flow')
@@ -244,6 +319,14 @@ export function AccountsPage() {
                       <Button
                         variant="ghost"
                         size="sm"
+                        onClick={() => viewJson(account.name)}
+                        title="View JSON"
+                      >
+                        <FileJson className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
                         onClick={() => refreshMutation.mutate(account.name)}
                         disabled={refreshMutation.isPending}
                         title="Refresh token"
@@ -334,41 +417,100 @@ export function AccountsPage() {
 
           <div className="space-y-4">
             {oauthStatus === 'idle' && (
-              <>
-                <div>
-                  <label className="text-sm font-medium">Provider</label>
-                  <Select value={selectedProvider} onValueChange={setSelectedProvider}>
-                    <SelectTrigger className="mt-1">
-                      <SelectValue placeholder="Select a provider" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PROVIDERS.map((provider) => (
-                        <SelectItem key={provider} value={provider}>
-                          <span className="capitalize">{provider}</span>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+              <div className="space-y-3">
+                <div className="flex gap-2 border-b">
+                  <button
+                    onClick={() => setAddMode('oauth')}
+                    className={`px-4 py-2 text-sm font-medium transition-colors ${
+                      addMode === 'oauth' ? 'border-b-2 border-primary text-primary' : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    OAuth Login
+                  </button>
+                  <button
+                    onClick={() => setAddMode('import')}
+                    className={`px-4 py-2 text-sm font-medium transition-colors ${
+                      addMode === 'import' ? 'border-b-2 border-primary text-primary' : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    Import JSON
+                  </button>
                 </div>
-                <Button onClick={startOAuth} disabled={!selectedProvider} className="w-full">
-                  Start OAuth Flow
-                </Button>
-              </>
+
+                {addMode === 'oauth' && (
+                  <>
+                    <p className="text-sm text-muted-foreground">Select a provider to connect your account:</p>
+                    <div className="grid gap-2">
+                      {OAUTH_PROVIDERS.map((provider) => (
+                        <button
+                          key={provider.id}
+                          onClick={() => setSelectedProvider(provider.id)}
+                          className={`flex items-center gap-3 p-3 rounded-lg border text-left transition-colors hover:bg-accent/50 ${
+                            selectedProvider === provider.id ? 'border-primary bg-primary/10 ring-1 ring-primary' : 'border-input bg-card'
+                          }`}
+                        >
+                          <span className="text-2xl">{provider.icon}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium text-foreground">{provider.name}</div>
+                            <div className="text-xs text-muted-foreground truncate">{provider.description}</div>
+                          </div>
+                          {provider.flowType === 'device' && (
+                            <Badge variant="outline" className="text-xs shrink-0">Device</Badge>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                    <Button onClick={startOAuth} disabled={!selectedProvider} className="w-full">
+                      Connect {selectedProvider ? OAUTH_PROVIDERS.find(p => p.id === selectedProvider)?.name : 'Account'}
+                    </Button>
+                  </>
+                )}
+
+                {addMode === 'import' && (
+                  <div className="space-y-3">
+                    <p className="text-sm text-muted-foreground">Paste raw JSON credential (must include "type" field):</p>
+                    <textarea
+                      value={importJson}
+                      onChange={(e) => setImportJson(e.target.value)}
+                      placeholder='{"type": "claude", "email": "...", "token": {...}}'
+                      className="w-full h-48 p-3 rounded-md border bg-muted font-mono text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+                    />
+                    <Button onClick={handleImportJson} disabled={isImporting || !importJson.trim()} className="w-full">
+                      {isImporting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Upload className="h-4 w-4 mr-2" />}
+                      Import Account
+                    </Button>
+                  </div>
+                )}
+              </div>
             )}
 
             {oauthStatus === 'pending' && (
               <div className="space-y-4">
-                <div className="bg-muted p-4 rounded-md">
-                  <p className="text-sm">Please complete the authentication in your browser.</p>
-                  {authUrl && (
-                    <Button variant="outline" size="sm" className="mt-2" onClick={() => window.open(authUrl, '_blank')}>
+                {deviceCode ? (
+                  <div className="bg-muted p-4 rounded-md space-y-3">
+                    <p className="text-sm font-medium">Enter this code on the authorization page:</p>
+                    <div className="bg-background p-3 rounded border text-center">
+                      <code className="text-2xl font-mono font-bold tracking-widest">{deviceCode.userCode}</code>
+                    </div>
+                    <Button variant="outline" size="sm" className="w-full" onClick={() => window.open(deviceCode.verificationUrl, '_blank')}>
                       <ExternalLink className="h-4 w-4 mr-2" />
-                      Open Auth Page
+                      Open Verification Page
                     </Button>
-                  )}
-                </div>
+                  </div>
+                ) : (
+                  <div className="bg-muted p-4 rounded-md">
+                    <p className="text-sm">Please complete the authentication in your browser.</p>
+                    {authUrl && (
+                      <Button variant="outline" size="sm" className="mt-2" onClick={() => window.open(authUrl, '_blank')}>
+                        <ExternalLink className="h-4 w-4 mr-2" />
+                        Open Auth Page
+                      </Button>
+                    )}
+                  </div>
+                )}
                 <div className="flex items-center justify-center py-4">
                   <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                  <span className="ml-2 text-sm text-muted-foreground">Waiting for authorization...</span>
                 </div>
                 <Button variant="outline" onClick={handleDialogClose} className="w-full">
                   Cancel
@@ -391,6 +533,26 @@ export function AccountsPage() {
                 </Button>
               </div>
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={jsonDialogOpen} onOpenChange={setJsonDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[80vh]">
+          <DialogHeader>
+            <div className="flex items-center justify-between">
+              <DialogTitle className="flex items-center gap-2">
+                <FileJson className="h-5 w-5" />
+                {jsonFileName}
+              </DialogTitle>
+              <Button variant="outline" size="sm" onClick={copyJson} className="mr-8">
+                {copied ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />}
+                {copied ? 'Copied' : 'Copy'}
+              </Button>
+            </div>
+          </DialogHeader>
+          <div className="overflow-auto max-h-[60vh] bg-muted rounded-md p-4">
+            <pre className="text-sm font-mono whitespace-pre-wrap break-all">{jsonContent}</pre>
           </div>
         </DialogContent>
       </Dialog>

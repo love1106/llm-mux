@@ -128,7 +128,7 @@ func (m *CallbackServersManager) ensureServerRunning(port int, providers []strin
 		return nil
 	}
 
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	addr := fmt.Sprintf("0.0.0.0:%d", port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", addr, err)
@@ -304,7 +304,7 @@ func (m *CallbackServersManager) StartForwarder(port int, provider, targetBase s
 		m.stopForwarderInstance(prev)
 	}
 
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	addr := fmt.Sprintf("0.0.0.0:%d", port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on %s: %w", addr, err)

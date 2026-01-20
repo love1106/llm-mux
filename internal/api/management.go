@@ -78,6 +78,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/auth-files/download", s.mgmt.DownloadAuthFile)
 		mgmt.POST("/auth-files", s.mgmt.UploadAuthFile)
 		mgmt.POST("/auth-files/refresh", s.mgmt.RefreshAuthFile)
+		mgmt.POST("/auth-files/import", s.mgmt.ImportRawJSON)
 		mgmt.DELETE("/auth-files", s.mgmt.DeleteAuthFile)
 		mgmt.POST("/vertex/import", s.mgmt.ImportVertexCredential)
 

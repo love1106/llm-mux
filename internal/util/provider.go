@@ -1,26 +1,25 @@
 package util
 
 import (
-	"fmt"
-	"log/slog"
 	"net/url"
 	"strings"
 
+	log "github.com/nghyane/llm-mux/internal/logging"
 	"github.com/nghyane/llm-mux/internal/registry"
 )
 
 func GetProviderName(modelName string) []string {
 	if modelName == "" {
-		slog.Debug("GetProviderName: empty modelName")
+		log.Debugf("GetProviderName: empty modelName")
 		return nil
 	}
 
 	normalizer := registry.NewModelIDNormalizer()
 	cleanModelName := normalizer.NormalizeModelID(modelName)
-	slog.Debug(fmt.Sprintf("GetProviderName: modelName=%s, cleanModelName=%s", modelName, cleanModelName))
+	log.Infof("GetProviderName: modelName=%s, cleanModelName=%s", modelName, cleanModelName)
 
 	modelProviders := registry.GetGlobalRegistry().GetModelProviders(cleanModelName)
-	slog.Debug(fmt.Sprintf("GetProviderName: modelProviders=%v", modelProviders))
+	log.Infof("GetProviderName: modelProviders=%v", modelProviders)
 
 	return modelProviders
 }
@@ -42,11 +41,11 @@ func ResolveAutoModel(modelName string) string {
 
 	firstModel, err := registry.GetGlobalRegistry().GetFirstAvailableModel("")
 	if err != nil {
-		slog.Warn(fmt.Sprintf("Failed to resolve 'auto' model: %v, falling back to original model name", err))
+		log.Warnf("Failed to resolve 'auto' model: %v, falling back to original model name", err)
 		return modelName
 	}
 
-	slog.Info(fmt.Sprintf("Resolved 'auto' model to: %s", firstModel))
+	log.Infof("Resolved 'auto' model to: %s", firstModel)
 	return firstModel
 }
 

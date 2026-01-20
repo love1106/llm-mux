@@ -279,11 +279,14 @@ func (m *Manager) Load(ctx context.Context) error {
 // Execute performs a non-streaming execution using the configured selector and executor.
 // It supports multiple providers for the same model with weighted selection based on performance.
 func (m *Manager) Execute(ctx context.Context, providers []string, req Request, opts Options) (Response, error) {
+	log.Infof("Execute: providers=%v, model=%s", providers, req.Model)
 	normalized := m.normalizeProviders(providers)
+	log.Infof("Execute: normalized=%v", normalized)
 	if len(normalized) == 0 {
 		return Response{}, &Error{Code: "provider_not_found", Message: "no provider supplied"}
 	}
 	selected := m.selectProviders(req.Model, normalized)
+	log.Infof("Execute: selected=%v", selected)
 
 	retryTimes, maxWait := m.retrySettings()
 	attempts := retryTimes + 1
@@ -744,6 +747,7 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts Opt
 }
 
 func (m *Manager) pickNextFromRegistry(ctx context.Context, provider, model string, opts Options, tried map[string]struct{}) (*Auth, ProviderExecutor, error) {
+	log.Infof("pickNextFromRegistry: provider=%s, model=%s, registry=%v", provider, model, m.registry != nil)
 	if m.registry == nil {
 		return m.pickNext(ctx, provider, model, opts, tried)
 	}
@@ -751,6 +755,7 @@ func (m *Manager) pickNextFromRegistry(ctx context.Context, provider, model stri
 	m.mu.RLock()
 	executor, okExecutor := m.executors[provider]
 	m.mu.RUnlock()
+	log.Infof("pickNextFromRegistry: executor found=%v for provider=%s", okExecutor, provider)
 	if !okExecutor {
 		return nil, nil, &Error{Code: "executor_not_found", Message: "executor not registered"}
 	}
@@ -760,21 +765,31 @@ func (m *Manager) pickNextFromRegistry(ctx context.Context, provider, model stri
 		modelKey = strings.TrimSpace(model)
 	}
 
+	allEntries := m.registry.ListByProvider(provider)
+	log.Infof("pickNextFromRegistry: ListByProvider(%s) returned %d entries", provider, len(allEntries))
+	for i, e := range allEntries {
+		log.Infof("pickNextFromRegistry: entry[%d] id=%s provider=%s disabled=%v", i, e.ID(), e.Provider(), e.IsDisabled())
+	}
+
 	var entries []*AuthEntry
 	registryRef := registry.GetGlobalRegistry()
-	for _, entry := range m.registry.ListByProvider(provider) {
+	for _, entry := range allEntries {
 		if entry.IsDisabled() {
+			log.Infof("pickNextFromRegistry: entry %s is disabled, skipping", entry.ID())
 			continue
 		}
 		if _, used := tried[entry.ID()]; used {
+			log.Infof("pickNextFromRegistry: entry %s already tried, skipping", entry.ID())
 			continue
 		}
 		if modelKey != "" && registryRef != nil && !registryRef.ClientSupportsModel(entry.ID(), modelKey) {
+			log.Infof("pickNextFromRegistry: entry %s does not support model %s, skipping", entry.ID(), modelKey)
 			continue
 		}
 		entries = append(entries, entry)
 	}
 
+	log.Infof("pickNextFromRegistry: after filtering, %d entries available", len(entries))
 	if len(entries) == 0 {
 		return nil, nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 	}

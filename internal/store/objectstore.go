@@ -586,9 +586,12 @@ func (s *ObjectTokenStore) readAuthFile(path, baseDir string) (*provider.Auth, e
 	if err = json.Unmarshal(data, &metadata); err != nil {
 		return nil, fmt.Errorf("unmarshal auth json: %w", err)
 	}
-	providerName := strings.TrimSpace(valueAsString(metadata["type"]))
+	providerName := strings.ToLower(strings.TrimSpace(valueAsString(metadata["type"])))
 	if providerName == "" {
 		providerName = "unknown"
+	}
+	if providerName == "gemini" {
+		providerName = "gemini-cli"
 	}
 	info, err := os.Stat(path)
 	if err != nil {

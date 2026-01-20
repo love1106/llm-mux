@@ -84,8 +84,10 @@ export const managementApi = {
   putConfigYAML: (yaml: string) => api.put('/config.yaml', yaml, { headers: { 'Content-Type': 'application/yaml' } }),
 
   getAuthFiles: () => api.get<ApiResponse<{ files: AuthFile[] }>>('/auth-files'),
+  getAuthFileContent: (name: string) => api.get<Record<string, unknown>>('/auth-files/download', { params: { name } }),
   deleteAuthFile: (name: string) => api.delete('/auth-files', { params: { name } }),
   refreshAuthFile: (id: string) => api.post<ApiResponse<{ status: string; message: string }>>('/auth-files/refresh', null, { params: { id } }),
+  importRawJSON: (jsonData: string) => api.post<ApiResponse<{ status: string; filename: string }>>('/auth-files/import', jsonData, { headers: { 'Content-Type': 'application/json' } }),
 
   getUsage: (params?: { days?: number; from?: string; to?: string }) =>
     api.get<ApiResponse<UsageStats>>('/usage', { params }),

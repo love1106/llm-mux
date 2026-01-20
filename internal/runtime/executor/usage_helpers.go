@@ -111,7 +111,11 @@ func (r *usageReporter) publishWithOutcome(ctx context.Context, u *ir.Usage, fai
 		log.Debugf("usage_reporter: zero tokens and not failed, skipping")
 		return
 	}
-	log.Infof("usage_reporter: publishing usage for %s/%s, tokens=%d", r.provider, r.model, u.TotalTokens)
+	var totalTokens int64
+	if u != nil {
+		totalTokens = u.TotalTokens
+	}
+	log.Infof("usage_reporter: publishing usage for %s/%s, tokens=%d", r.provider, r.model, totalTokens)
 	r.once.Do(func() {
 		usage.PublishRecord(ctx, usage.Record{
 			Provider:    r.provider,

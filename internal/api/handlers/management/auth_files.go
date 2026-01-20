@@ -490,6 +490,66 @@ func (h *Handler) processOneUpload(ctx context.Context, fileHeader *multipart.Fi
 	return uploadResult{Name: name, Status: "ok"}
 }
 
+func (h *Handler) ImportRawJSON(c *gin.Context) {
+	if h.authManager == nil {
+		respondError(c, http.StatusServiceUnavailable, ErrCodeInternalError, "core auth manager unavailable")
+		return
+	}
+	ctx := c.Request.Context()
+
+	const maxAuthFileSize = 1 * 1024 * 1024
+	data, err := io.ReadAll(io.LimitReader(c.Request.Body, maxAuthFileSize))
+	if err != nil {
+		respondBadRequest(c, "failed to read body")
+		return
+	}
+
+	metadata := make(map[string]any)
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		respondBadRequest(c, fmt.Sprintf("invalid JSON: %v", err))
+		return
+	}
+
+	providerType, _ := metadata["type"].(string)
+	providerType = strings.ToLower(strings.TrimSpace(providerType))
+	if providerType == "" {
+		respondBadRequest(c, "missing 'type' field in JSON")
+		return
+	}
+
+	email, _ := metadata["email"].(string)
+	email = strings.TrimSpace(email)
+
+	var filename string
+	if email != "" {
+		safeEmail := strings.ReplaceAll(email, "@", "_")
+		safeEmail = strings.ReplaceAll(safeEmail, ".", "_")
+		filename = fmt.Sprintf("%s-%s.json", providerType, safeEmail)
+	} else {
+		filename = fmt.Sprintf("%s-%d.json", providerType, time.Now().Unix())
+	}
+
+	dst := filepath.Join(h.cfg.AuthDir, filepath.Base(filename))
+	if !filepath.IsAbs(dst) {
+		if abs, errAbs := filepath.Abs(dst); errAbs == nil {
+			dst = abs
+		}
+	}
+
+	if errWrite := os.WriteFile(dst, data, 0o600); errWrite != nil {
+		respondInternalError(c, fmt.Sprintf("failed to write file: %v", errWrite))
+		return
+	}
+
+	if err = h.registerAuthFromFile(ctx, dst, data); err != nil {
+		respondInternalError(c, err.Error())
+		return
+	}
+
+	h.syncAuthToRemote(ctx, "Import", filename, dst)
+	respondOK(c, gin.H{"status": "ok", "filename": filename})
+}
+
 func (h *Handler) DeleteAuthFile(c *gin.Context) {
 	if h.authManager == nil {
 		respondError(c, http.StatusServiceUnavailable, ErrCodeInternalError, "core auth manager unavailable")
@@ -614,8 +674,12 @@ func (h *Handler) registerAuthFromFile(ctx context.Context, path string, data []
 		return fmt.Errorf("invalid auth file: %w", err)
 	}
 	providerType, _ := metadata["type"].(string)
+	providerType = strings.ToLower(strings.TrimSpace(providerType))
 	if providerType == "" {
 		providerType = "unknown"
+	}
+	if providerType == "gemini" {
+		providerType = "gemini-cli"
 	}
 	label := providerType
 	if email, ok := metadata["email"].(string); ok && email != "" {

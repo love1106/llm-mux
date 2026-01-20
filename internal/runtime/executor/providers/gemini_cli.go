@@ -546,6 +546,7 @@ func updateGeminiCLITokenMetadata(auth *provider.Auth, base map[string]any, tok 
 	shared := geminicli.ResolveSharedCredential(auth.Runtime)
 	if shared != nil {
 		snapshot := shared.MergeMetadata(fields)
+		cleanupRootTokenFields(snapshot)
 		if !geminicli.IsVirtual(auth.Runtime) {
 			auth.Metadata = snapshot
 		}
@@ -557,6 +558,17 @@ func updateGeminiCLITokenMetadata(auth *provider.Auth, base map[string]any, tok 
 	for k, v := range fields {
 		auth.Metadata[k] = v
 	}
+	cleanupRootTokenFields(auth.Metadata)
+}
+
+func cleanupRootTokenFields(m map[string]any) {
+	if m == nil {
+		return
+	}
+	delete(m, "access_token")
+	delete(m, "refresh_token")
+	delete(m, "token_type")
+	delete(m, "expiry")
 }
 
 func buildGeminiTokenMap(base map[string]any, tok *oauth2.Token) map[string]any {
@@ -576,19 +588,7 @@ func buildGeminiTokenMap(base map[string]any, tok *oauth2.Token) map[string]any 
 }
 
 func buildGeminiTokenFields(tok *oauth2.Token, merged map[string]any) map[string]any {
-	fields := make(map[string]any, 5)
-	if tok.AccessToken != "" {
-		fields["access_token"] = tok.AccessToken
-	}
-	if tok.TokenType != "" {
-		fields["token_type"] = tok.TokenType
-	}
-	if tok.RefreshToken != "" {
-		fields["refresh_token"] = tok.RefreshToken
-	}
-	if !tok.Expiry.IsZero() {
-		fields["expiry"] = tok.Expiry.Format(time.RFC3339)
-	}
+	fields := make(map[string]any, 1)
 	if len(merged) > 0 {
 		fields["token"] = executor.CloneMap(merged)
 	}

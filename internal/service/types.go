@@ -159,7 +159,15 @@ func (h *ServiceHook) SetService(svc *Service) {
 	h.svcMu.Unlock()
 }
 
+func (h *ServiceHook) OnAuthRegistered(ctx context.Context, auth *provider.Auth) {
+	h.registerModels(auth)
+}
+
 func (h *ServiceHook) OnAuthUpdated(ctx context.Context, auth *provider.Auth) {
+	h.registerModels(auth)
+}
+
+func (h *ServiceHook) registerModels(auth *provider.Auth) {
 	h.svcMu.RLock()
 	svc := h.svc
 	h.svcMu.RUnlock()

@@ -159,6 +159,8 @@ func (r *AuthRegistry) Register(ctx context.Context, auth *Auth) (*Auth, error) 
 		return nil, nil
 	}
 
+	log.Infof("AuthRegistry.Register: id=%s, provider=%s", auth.ID, auth.Provider)
+
 	if auth.ID == "" {
 		auth.ID = uuid.NewString()
 	}
@@ -338,15 +340,19 @@ func (r *AuthRegistry) ListEntries() []*AuthEntry {
 
 func (r *AuthRegistry) ListByProvider(provider string) []*AuthEntry {
 	var result []*AuthEntry
+	total := 0
 	for _, shard := range r.shards {
 		shard.mu.RLock()
 		for _, entry := range shard.entries {
+			total++
+			log.Infof("ListByProvider: checking entry id=%s, provider=%s, looking for=%s", entry.ID(), entry.Provider(), provider)
 			if entry.Provider() == provider {
 				result = append(result, entry)
 			}
 		}
 		shard.mu.RUnlock()
 	}
+	log.Infof("ListByProvider: total entries=%d, matched=%d for provider=%s", total, len(result), provider)
 	return result
 }
 

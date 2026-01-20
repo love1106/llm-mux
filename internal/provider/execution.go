@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	log "github.com/nghyane/llm-mux/internal/logging"
 	"github.com/nghyane/llm-mux/internal/registry"
 	"github.com/nghyane/llm-mux/internal/telemetry"
 	"github.com/sony/gobreaker"
@@ -13,6 +14,7 @@ import (
 // ExecuteWithProvider handles non-streaming execution for a single provider, attempting
 // multiple auth candidates until one succeeds or all are exhausted.
 func (m *Manager) executeWithProvider(ctx context.Context, provider string, req Request, opts Options) (Response, error) {
+	log.Infof("executeWithProvider: provider=%s, model=%s", provider, req.Model)
 	if provider == "" {
 		return Response{}, &Error{Code: "provider_not_found", Message: "provider identifier is empty"}
 	}

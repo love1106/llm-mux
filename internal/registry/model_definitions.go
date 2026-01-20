@@ -6,7 +6,7 @@ package registry
 // GetClaudeModels returns the standard Claude model definitions
 func GetClaudeModels() []*ModelInfo {
 	return []*ModelInfo{
-		Claude("claude-haiku-4-5-20251001").Display("Claude 4.5 Haiku").Created(1759276800).Context(200000, 64000).B(),
+		Claude("claude-haiku-4-5-20251001").Display("Claude 4.5 Haiku").Created(1759276800).Canonical("claude-haiku-4-5").Context(200000, 64000).B(),
 		Claude("claude-sonnet-4-5-20250929").Display("Claude 4.5 Sonnet").Created(1759104000).Canonical("claude-sonnet-4-5").Context(200000, 64000).B(),
 		Claude("claude-sonnet-4-5-thinking").Display("Claude 4.5 Sonnet Thinking").Created(1759104000).Context(200000, 64000).Thinking(1024, 100000).B(),
 		Claude("claude-opus-4-5-thinking").Display("Claude 4.5 Opus Thinking").Created(1761955200).Context(200000, 64000).Thinking(1024, 100000).B(),
@@ -14,11 +14,11 @@ func GetClaudeModels() []*ModelInfo {
 		Claude("claude-opus-4-5-thinking-medium").Display("Claude 4.5 Opus Thinking Medium").Created(1761955200).Context(200000, 64000).Thinking(1024, 100000).B(),
 		Claude("claude-opus-4-5-thinking-high").Display("Claude 4.5 Opus Thinking High").Created(1761955200).Context(200000, 64000).Thinking(1024, 100000).B(),
 		Claude("claude-opus-4-5-20251101").Display("Claude 4.5 Opus").Desc("Premium model combining maximum intelligence with practical performance").Created(1761955200).Canonical("claude-opus-4-5").Context(200000, 64000).B(),
-		Claude("claude-opus-4-1-20250805").Display("Claude 4.1 Opus").Created(1722945600).Context(200000, 32000).B(),
+		Claude("claude-opus-4-1-20250805").Display("Claude 4.1 Opus").Created(1722945600).Canonical("claude-opus-4-1").Context(200000, 32000).B(),
 		Claude("claude-opus-4-20250514").Display("Claude 4 Opus").Created(1715644800).Canonical("claude-opus-4").Context(200000, 32000).B(),
 		Claude("claude-sonnet-4-20250514").Display("Claude 4 Sonnet").Created(1715644800).Canonical("claude-sonnet-4").Context(200000, 64000).B(),
-		Claude("claude-3-7-sonnet-20250219").Display("Claude 3.7 Sonnet").Created(1708300800).Context(128000, 8192).B(),
-		Claude("claude-3-5-haiku-20241022").Display("Claude 3.5 Haiku").Created(1729555200).Context(128000, 8192).B(),
+		Claude("claude-3-7-sonnet-20250219").Display("Claude 3.7 Sonnet").Created(1708300800).Canonical("claude-3-7-sonnet").Context(128000, 8192).B(),
+		Claude("claude-3-5-haiku-20241022").Display("Claude 3.5 Haiku").Created(1729555200).Canonical("claude-3-5-haiku").Context(128000, 8192).B(),
 	}
 }
 
