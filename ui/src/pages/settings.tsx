@@ -58,17 +58,21 @@ export function SettingsPage() {
   })
 
   const handleSaveKey = () => {
-    setManagementKey(keyInput || null)
+    const trimmedKey = keyInput.trim() || null
+    setManagementKey(trimmedKey)
+    setKeyInput(trimmedKey || '')
     queryClient.invalidateQueries()
     toast.success('Management key saved')
   }
 
   const handleValidateKey = async () => {
-    if (!keyInput) {
+    const trimmedKey = keyInput.trim()
+    if (!trimmedKey) {
       toast.error('Please enter a key')
       return
     }
-    setManagementKey(keyInput)
+    setKeyInput(trimmedKey)
+    setManagementKey(trimmedKey)
     try {
       await managementApi.getDebug()
       toast.success('Key is valid!')
