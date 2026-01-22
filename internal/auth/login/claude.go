@@ -126,9 +126,22 @@ func (a *ClaudeAuthenticator) Login(ctx context.Context, cfg *config.Config, opt
 		return nil, fmt.Errorf("claude token storage missing account information")
 	}
 
+	orgs, err := authSvc.FetchOrganizations(ctx, tokenStorage.AccessToken)
+	if err != nil {
+		log.Warnf("Failed to fetch organizations for subscription type: %v", err)
+	} else {
+		tokenStorage.SubscriptionType = claude.DetermineSubscriptionType(orgs)
+		if tokenStorage.SubscriptionType != "" {
+			log.Infof("Detected Claude subscription type: %s", tokenStorage.SubscriptionType)
+		}
+	}
+
 	fileName := fmt.Sprintf("claude-%s.json", tokenStorage.Email)
 	metadata := map[string]any{
 		"email": tokenStorage.Email,
+	}
+	if tokenStorage.SubscriptionType != "" {
+		metadata["subscription_type"] = tokenStorage.SubscriptionType
 	}
 
 	fmt.Println("Claude authentication successful")

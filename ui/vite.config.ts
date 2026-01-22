@@ -29,6 +29,10 @@ export default defineConfig({
       '/v1/management': {
         target: 'http://localhost:8317',
         changeOrigin: true,
+      },
+      '/v1/messages': {
+        target: 'http://localhost:8317',
+        changeOrigin: true,
       }
     }
   },
@@ -36,6 +40,10 @@ export default defineConfig({
     port: 8318,
     proxy: {
       '/v1/management': {
+        target: 'http://localhost:8317',
+        changeOrigin: true,
+      },
+      '/v1/messages': {
         target: 'http://localhost:8317',
         changeOrigin: true,
       }

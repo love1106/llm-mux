@@ -11,6 +11,12 @@ All integrations use the same configuration:
 | **Base URL** | `http://localhost:8317/v1` (OpenAI) or `http://localhost:8317` (Anthropic/Gemini) |
 | **API Key** | `unused` (or any string) |
 
+**Note:** To use `unused` as API key, start the server with:
+```bash
+LLM_MUX_API_KEYS=unused llm-mux serve
+```
+Or add `api-keys: ["unused"]` to your `~/.config/llm-mux/config.yaml`.
+
 ---
 
 ## Editors & IDEs

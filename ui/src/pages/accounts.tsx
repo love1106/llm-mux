@@ -22,6 +22,7 @@ import {
   Copy,
   Check,
   Upload,
+  Play,
 } from 'lucide-react'
 
 const CLAUDE_DAILY_LIMIT = 45_000_000
@@ -67,6 +68,9 @@ export function AccountsPage() {
   const [addMode, setAddMode] = useState<'oauth' | 'import'>('oauth')
   const [importJson, setImportJson] = useState('')
   const [isImporting, setIsImporting] = useState(false)
+  const [testDialogOpen, setTestDialogOpen] = useState(false)
+  const [testResponse, setTestResponse] = useState('')
+  const [isTesting, setIsTesting] = useState(false)
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['auth-files'],
@@ -153,6 +157,89 @@ export function AccountsPage() {
       setTimeout(() => setCopied(false), 2000)
     } catch {
       toast.error('Failed to copy')
+    }
+  }
+
+  const getTestModel = (provider: string): string => {
+    const p = provider?.toLowerCase() || ''
+    if (p.includes('claude') || p.includes('anthropic')) return 'claude-sonnet-4-20250514'
+    if (p.includes('copilot') || p.includes('github')) return 'gpt-4o'
+    if (p.includes('gemini') || p.includes('antigravity')) return 'gemini-2.5-flash'
+    if (p.includes('qwen')) return 'qwen-plus'
+    if (p.includes('codex')) return 'o4-mini'
+    return 'claude-sonnet-4-20250514'
+  }
+
+  const testAccountDirect = async (account: AuthFile) => {
+    const provider = account.provider || account.type || ''
+    const model = getTestModel(provider)
+    
+    setTestResponse('')
+    setIsTesting(true)
+    setTestDialogOpen(true)
+
+    try {
+      const response = await fetch('/v1/messages?skip-auth=true', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: 'Say "OK" only' }],
+          max_tokens: 10,
+          stream: true,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        setTestResponse(`Error ${response.status}: ${errorText}`)
+        toast.error('Account test failed')
+        return
+      }
+
+      const reader = response.body?.getReader()
+      if (!reader) {
+        setTestResponse('Error: No response body')
+        toast.error('Account test failed')
+        return
+      }
+
+      const decoder = new TextDecoder()
+      let fullText = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        const chunk = decoder.decode(value, { stream: true })
+        const lines = chunk.split('\n')
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6).trim()
+            if (data === '[DONE]' || !data) continue
+            try {
+              const parsed = JSON.parse(data)
+              const text = parsed.delta?.text || parsed.content_block?.text || parsed.content?.[0]?.text || ''
+              if (text) {
+                fullText += text
+                setTestResponse(fullText)
+              }
+            } catch {
+            }
+          }
+        }
+      }
+
+      toast.success('Account test passed')
+    } catch (err) {
+      setTestResponse(`Error: ${(err as Error).message}`)
+      toast.error('Account test failed')
+    } finally {
+      setIsTesting(false)
     }
   }
 
@@ -316,6 +403,15 @@ export function AccountsPage() {
                       </Badge>
                     </div>
                     <div className="flex gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => testAccountDirect(account)}
+                        disabled={isTesting}
+                        title="Test account"
+                      >
+                        <Play className="h-4 w-4 text-green-500" />
+                      </Button>
                       <Button
                         variant="ghost"
                         size="sm"
@@ -553,6 +649,42 @@ export function AccountsPage() {
           </DialogHeader>
           <div className="overflow-auto max-h-[60vh] bg-muted rounded-md p-4">
             <pre className="text-sm font-mono whitespace-pre-wrap break-all">{jsonContent}</pre>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={testDialogOpen} onOpenChange={setTestDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Play className="h-5 w-5" />
+              Test Account
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Sending test message to LLM via llm-mux server...
+            </p>
+            <div className="bg-muted rounded-md p-4 min-h-[100px] max-h-[300px] overflow-auto">
+              {isTesting && !testResponse && (
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Waiting for response...</span>
+                </div>
+              )}
+              {testResponse && (
+                <pre className="text-sm font-mono whitespace-pre-wrap">{testResponse}</pre>
+              )}
+              {!isTesting && !testResponse && (
+                <span className="text-muted-foreground">No response yet</span>
+              )}
+            </div>
+            {!isTesting && testResponse && (
+              <div className="flex items-center gap-2 text-green-600">
+                <CheckCircle className="h-4 w-4" />
+                <span className="text-sm">Test completed</span>
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>

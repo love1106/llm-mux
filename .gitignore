@@ -32,7 +32,7 @@ auths/*
 # Documentation (generated/private only)
 # docs/ is now tracked - contains public documentation
 AGENTS.md
-CLAUDE.md
+#CLAUDE.md
 GEMINI.md
 
 # Tooling metadata

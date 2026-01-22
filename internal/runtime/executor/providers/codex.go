@@ -455,7 +455,8 @@ func (e *CodexExecutor) Refresh(ctx context.Context, auth *provider.Auth) (*prov
 		}
 	}
 	if refreshToken == "" {
-		return auth, nil
+		log.Warnf("codex executor: no refresh_token found in metadata for auth %s", auth.ID)
+		return nil, fmt.Errorf("codex executor: no refresh_token found in metadata for auth %s", auth.ID)
 	}
 	svc := codexauth.NewCodexAuth(e.Cfg)
 	td, err := svc.RefreshTokensWithRetry(ctx, refreshToken, 3)

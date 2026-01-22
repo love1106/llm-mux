@@ -1,4 +1,4 @@
-.PHONY: build test clean release help docs
+.PHONY: build test clean release help docs dev
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
@@ -7,6 +7,9 @@ LDFLAGS := -s -w -X 'main.Version=$(VERSION)' -X 'main.Commit=$(COMMIT)' -X 'mai
 
 build:
 	@CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o llm-mux ./cmd/server/
+
+dev: build
+	@./llm-mux serve
 
 test:
 	@go test ./...
@@ -22,6 +25,7 @@ release:
 
 help:
 	@echo "make build            - Build binary"
+	@echo "make dev              - Build and start server"
 	@echo "make test             - Run tests"
 	@echo "make clean            - Remove artifacts"
 	@echo "make release [cmd]    - Run release script"

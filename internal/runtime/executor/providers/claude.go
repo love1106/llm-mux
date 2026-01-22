@@ -354,7 +354,7 @@ func (e *ClaudeExecutor) Refresh(ctx context.Context, auth *provider.Auth) (*pro
 	}
 	if refreshToken == "" {
 		log.Warnf("claude executor: no refresh_token found in metadata for auth %s", auth.ID)
-		return auth, nil
+		return nil, fmt.Errorf("claude executor: no refresh_token found in metadata for auth %s", auth.ID)
 	}
 	log.Infof("claude executor: refreshing token for %s", auth.ID)
 	svc := claude.NewClaudeAuth(e.Cfg)

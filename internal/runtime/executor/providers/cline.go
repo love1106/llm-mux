@@ -237,7 +237,8 @@ func (e *ClineExecutor) Refresh(ctx context.Context, auth *provider.Auth) (*prov
 
 	refreshToken, ok := executor.ExtractRefreshToken(auth)
 	if !ok {
-		return auth, nil
+		log.Warnf("cline executor: no refresh_token found in metadata for auth %s", auth.ID)
+		return nil, fmt.Errorf("cline executor: no refresh_token found in metadata for auth %s", auth.ID)
 	}
 
 	svc := clineauth.NewClineAuth(e.Cfg)

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	log "github.com/nghyane/llm-mux/internal/logging"
 	copilotauth "github.com/nghyane/llm-mux/internal/auth/copilot"
 	"github.com/nghyane/llm-mux/internal/config"
 	"github.com/nghyane/llm-mux/internal/provider"
@@ -163,7 +164,8 @@ func (e *CopilotExecutor) Refresh(ctx context.Context, auth *provider.Auth) (*pr
 
 	accessToken := executor.MetaStringValue(auth.Metadata, "access_token")
 	if accessToken == "" {
-		return auth, nil
+		log.Warnf("copilot executor: no access_token found in metadata for auth %s", auth.ID)
+		return nil, fmt.Errorf("copilot executor: no access_token found in metadata for auth %s", auth.ID)
 	}
 
 	copilotAuth := copilotauth.NewCopilotAuth(e.Cfg)

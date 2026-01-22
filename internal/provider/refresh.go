@@ -28,9 +28,7 @@ func newRefreshSemaphore() *semaphore.Weighted {
 // every few seconds and triggers refresh operations when required.
 // Only one loop is kept alive; starting a new one cancels the previous run.
 func (m *Manager) StartAutoRefresh(parent context.Context, interval time.Duration) {
-	if interval <= 0 || interval > refreshCheckInterval {
-		interval = refreshCheckInterval
-	} else {
+	if interval <= 0 {
 		interval = refreshCheckInterval
 	}
 	if m.refreshCancel != nil {
@@ -91,23 +89,28 @@ func (m *Manager) checkRefreshes(ctx context.Context) {
 			}
 			log.Debugf("checking refresh for %s, %s, %s", a.Provider, a.ID, typ)
 
-			if exec := m.executorFor(a.Provider); exec == nil {
+		if exec := m.executorFor(a.Provider); exec == nil {
+			continue
+		}
+		if m.refreshSem != nil {
+			if !m.refreshSem.TryAcquire(1) {
+				log.Debugf("refresh skipped for %s: semaphore full, will retry next interval", a.ID)
 				continue
 			}
 			if !m.markRefreshPending(a.ID, now) {
+				m.refreshSem.Release(1)
 				continue
 			}
-			// Use TryAcquire to avoid blocking the refresh loop.
-			// If semaphore is full, skip this refresh - it will be picked up next interval.
-			if m.refreshSem != nil && m.refreshSem.TryAcquire(1) {
-				go func(authID string) {
-					defer m.refreshSem.Release(1)
-					m.refreshAuth(ctx, authID)
-				}(a.ID)
-			} else if m.refreshSem == nil {
-				// Fallback for backwards compatibility if semaphore not initialized
-				go m.refreshAuth(ctx, a.ID)
+			go func(authID string) {
+				defer m.refreshSem.Release(1)
+				m.refreshAuth(ctx, authID)
+			}(a.ID)
+		} else {
+			if !m.markRefreshPending(a.ID, now) {
+				continue
 			}
+			go m.refreshAuth(ctx, a.ID)
+		}
 		}
 	}
 }

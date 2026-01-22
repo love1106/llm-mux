@@ -427,7 +427,8 @@ func (e *GeminiExecutor) Refresh(ctx context.Context, auth *provider.Auth) (*pro
 		}
 	}
 	if refreshToken == "" {
-		return auth, nil
+		log.Warnf("gemini executor: no refresh_token found in metadata for auth %s", auth.ID)
+		return nil, fmt.Errorf("gemini executor: no refresh_token found in metadata for auth %s", auth.ID)
 	}
 
 	endpoint := google.Endpoint

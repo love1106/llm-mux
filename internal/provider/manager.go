@@ -875,9 +875,14 @@ func (m *Manager) refreshAuth(ctx context.Context, id string) {
 				_, _ = m.Update(ctx, current)
 				return
 			}
+			log.Warnf("refreshAuth: refresh failed for %s, will retry after %v: %s", id, refreshFailureBackoff, errMsg)
 			current.NextRefreshAfter = now.Add(refreshFailureBackoff)
 			current.LastError = &Error{Message: errMsg}
+			current.UpdatedAt = now
 			m.auths[id] = current
+			m.mu.Unlock()
+			_, _ = m.Update(ctx, current)
+			return
 		}
 		m.mu.Unlock()
 		return

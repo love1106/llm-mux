@@ -153,7 +153,8 @@ func (e *QwenExecutor) Refresh(ctx context.Context, auth *provider.Auth) (*provi
 
 	refreshToken, ok := executor.ExtractRefreshToken(auth)
 	if !ok {
-		return auth, nil
+		log.Warnf("qwen executor: no refresh_token found in metadata for auth %s", auth.ID)
+		return nil, fmt.Errorf("qwen executor: no refresh_token found in metadata for auth %s", auth.ID)
 	}
 
 	svc := qwenauth.NewQwenAuth(e.Cfg)

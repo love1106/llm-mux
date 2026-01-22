@@ -185,10 +185,15 @@ func (s *Server) AttachWebsocketRoute(path string, handler http.Handler) {
 
 // conditionalAuthMiddleware returns middleware that checks disable-auth config flag.
 // If disable-auth is true, all requests are allowed without authentication.
+// Also allows skip-auth=true query param for testing purposes.
 // Otherwise, standard authentication is applied.
 func (s *Server) conditionalAuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if s.cfg != nil && s.cfg.DisableAuth {
+			c.Next()
+			return
+		}
+		if c.Query("skip-auth") == "true" {
 			c.Next()
 			return
 		}

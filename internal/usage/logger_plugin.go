@@ -49,7 +49,11 @@ func (p *LoggerPlugin) HandleUsage(ctx context.Context, record Record) {
 		log.Debugf("usage: plugin is nil, skipping record")
 		return
 	}
-	log.Infof("usage: HandleUsage called for %s/%s tokens=%d", record.Provider, record.Model, record.Usage.TotalTokens)
+	var totalTokens int64
+	if record.Usage != nil {
+		totalTokens = record.Usage.TotalTokens
+	}
+	log.Infof("usage: HandleUsage called for %s/%s tokens=%d", record.Provider, record.Model, totalTokens)
 
 	timestamp := record.RequestedAt
 	if timestamp.IsZero() {
