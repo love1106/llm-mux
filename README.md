@@ -55,6 +55,59 @@ curl http://localhost:8317/v1/chat/completions \
 
 Works with: **Cursor, Aider, Claude Code, Cline, Continue, OpenCode, LangChain, Open WebUI**, and any OpenAI/Anthropic/Gemini compatible tool.
 
+## Claude Code Integration
+
+Use llm-mux as a backend for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) **without needing an Anthropic account**:
+
+### Option 1: No Account Required (Recommended)
+
+Create the config file to bypass OAuth:
+
+```bash
+# Create Claude Code config directory
+mkdir -p ~/.claude
+
+# Create minimal config to bypass onboarding
+cat > ~/.claude.json << 'EOF'
+{
+  "hasCompletedOnboarding": true,
+  "theme": "dark",
+  "numStartups": 1,
+  "installMethod": "npm"
+}
+EOF
+
+# Set environment and run
+export ANTHROPIC_BASE_URL="http://localhost:8317"
+export ANTHROPIC_API_KEY="unused"
+claude
+```
+
+### Option 2: With Existing Anthropic Account
+
+If you already have an Anthropic account:
+
+```bash
+# First run: complete OAuth login
+claude  # Login with your Anthropic account, then exit
+
+# Subsequent runs: use llm-mux for all API calls
+export ANTHROPIC_BASE_URL="http://localhost:8317"
+export ANTHROPIC_API_KEY="unused"
+claude
+```
+
+### Non-Interactive Mode
+
+`--print` mode works immediately without any setup:
+
+```bash
+ANTHROPIC_BASE_URL="http://localhost:8317" ANTHROPIC_API_KEY="unused" \
+  claude --print "Hello"
+```
+
+**Note:** Third-party clients (OpenCode, AI SDK) may encounter "credential only authorized for Claude Code" errors due to Anthropic API restrictions.
+
 ## Documentation
 
 📖 **https://nghyane.github.io/llm-mux/**

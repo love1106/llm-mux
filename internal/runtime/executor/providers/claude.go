@@ -278,11 +278,18 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *provider.Auth, r
 	}
 
 	from := opts.SourceFormat
-	isStreaming := from.String() != "claude"
-	body, err := stream.TranslateToClaude(e.Cfg, from, req.Model, req.Payload, isStreaming, req.Metadata)
-	if err != nil {
-		return provider.Response{}, err
+	var body []byte
+	var err error
+
+	if from.String() == "claude" {
+		body = req.Payload
+	} else {
+		body, err = stream.TranslateToClaude(e.Cfg, from, req.Model, req.Payload, false, req.Metadata)
+		if err != nil {
+			return provider.Response{}, err
+		}
 	}
+
 	modelForUpstream := req.Model
 	if modelOverride := e.resolveUpstreamModel(req.Model, auth); modelOverride != "" {
 		body, _ = sjson.SetBytes(body, "model", modelOverride)
@@ -521,17 +528,19 @@ func applyClaudeHeaders(r *http.Request, auth *provider.Auth, apiKey string, str
 
 	misc.EnsureHeader(r.Header, ginHeaders, "Anthropic-Version", "2023-06-01")
 	misc.EnsureHeader(r.Header, ginHeaders, "Anthropic-Dangerous-Direct-Browser-Access", "true")
-	misc.EnsureHeader(r.Header, ginHeaders, "X-App", "cli")
-	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Helper-Method", "stream")
-	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Retry-Count", "0")
-	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Runtime-Version", "v24.3.0")
-	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Package-Version", "0.55.1")
-	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Runtime", "node")
-	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Lang", "js")
-	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Arch", "arm64")
-	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Os", "MacOS")
-	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Timeout", "60")
-	misc.EnsureHeader(r.Header, ginHeaders, "User-Agent", executor.DefaultClaudeUserAgent)
+	// Force all identifying headers to match Claude CLI signature
+	// Claude Pro/Max accounts validate these headers to ensure requests come from Claude Code
+	r.Header.Set("X-App", "cli")
+	r.Header.Set("X-Stainless-Helper-Method", "stream")
+	r.Header.Set("X-Stainless-Retry-Count", "0")
+	r.Header.Set("X-Stainless-Runtime-Version", "v24.3.0")
+	r.Header.Set("X-Stainless-Package-Version", "0.55.1")
+	r.Header.Set("X-Stainless-Runtime", "node")
+	r.Header.Set("X-Stainless-Lang", "js")
+	r.Header.Set("X-Stainless-Arch", "arm64")
+	r.Header.Set("X-Stainless-Os", "MacOS")
+	r.Header.Set("X-Stainless-Timeout", "60")
+	r.Header.Set("User-Agent", executor.DefaultClaudeUserAgent)
 	if stream {
 		r.Header.Set("Accept", "text/event-stream")
 	} else {
