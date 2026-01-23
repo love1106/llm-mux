@@ -71,6 +71,8 @@ export function AccountsPage() {
   const [testDialogOpen, setTestDialogOpen] = useState(false)
   const [testResponse, setTestResponse] = useState('')
   const [isTesting, setIsTesting] = useState(false)
+  const [testMessage, setTestMessage] = useState('Say hello!')
+  const [testingAccount, setTestingAccount] = useState<AuthFile | null>(null)
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['auth-files'],
@@ -170,13 +172,19 @@ export function AccountsPage() {
     return 'claude-sonnet-4-20250514'
   }
 
-  const testAccountDirect = async (account: AuthFile) => {
-    const provider = account.provider || account.type || ''
+  const openTestDialog = (account: AuthFile) => {
+    setTestingAccount(account)
+    setTestResponse('')
+    setTestDialogOpen(true)
+  }
+
+  const runTest = async () => {
+    if (!testingAccount) return
+    const provider = testingAccount.provider || testingAccount.type || ''
     const model = getTestModel(provider)
     
     setTestResponse('')
     setIsTesting(true)
-    setTestDialogOpen(true)
 
     try {
       const response = await fetch('/v1/messages?skip-auth=true', {
@@ -187,8 +195,8 @@ export function AccountsPage() {
         },
         body: JSON.stringify({
           model,
-          messages: [{ role: 'user', content: 'Say "OK" only' }],
-          max_tokens: 10,
+          messages: [{ role: 'user', content: testMessage }],
+          max_tokens: 1024,
           stream: true,
         }),
       })
@@ -406,7 +414,7 @@ export function AccountsPage() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => testAccountDirect(account)}
+                        onClick={() => openTestDialog(account)}
                         disabled={isTesting}
                         title="Test account"
                       >
@@ -653,38 +661,98 @@ export function AccountsPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={testDialogOpen} onOpenChange={setTestDialogOpen}>
-        <DialogContent className="max-w-lg">
+      <Dialog open={testDialogOpen} onOpenChange={(open) => {
+        setTestDialogOpen(open)
+        if (!open) {
+          setTestingAccount(null)
+          setTestResponse('')
+        }
+      }}>
+        <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Play className="h-5 w-5" />
+              <Play className="h-5 w-5 text-green-500" />
               Test Account
+              {testingAccount && (
+                <Badge variant="secondary" className="ml-2 capitalize">
+                  {testingAccount.provider || testingAccount.type}
+                </Badge>
+              )}
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Sending test message to LLM via llm-mux server...
-            </p>
-            <div className="bg-muted rounded-md p-4 min-h-[100px] max-h-[300px] overflow-auto">
-              {isTesting && !testResponse && (
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  <span>Waiting for response...</span>
-                </div>
-              )}
-              {testResponse && (
-                <pre className="text-sm font-mono whitespace-pre-wrap">{testResponse}</pre>
-              )}
-              {!isTesting && !testResponse && (
-                <span className="text-muted-foreground">No response yet</span>
-              )}
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">Message</label>
+              <textarea
+                value={testMessage}
+                onChange={(e) => setTestMessage(e.target.value)}
+                placeholder="Enter your message..."
+                disabled={isTesting}
+                className="w-full h-24 p-3 rounded-lg border bg-background text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              />
             </div>
-            {!isTesting && testResponse && (
-              <div className="flex items-center gap-2 text-green-600">
-                <CheckCircle className="h-4 w-4" />
-                <span className="text-sm">Test completed</span>
+
+            <Button 
+              onClick={runTest} 
+              disabled={isTesting || !testMessage.trim()} 
+              className="w-full"
+            >
+              {isTesting ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Testing...
+                </>
+              ) : (
+                <>
+                  <Zap className="h-4 w-4 mr-2" />
+                  Send Test Request
+                </>
+              )}
+            </Button>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium text-foreground">Response</label>
+                {!isTesting && testResponse && (
+                  <div className="flex items-center gap-1.5 text-green-600">
+                    <CheckCircle className="h-3.5 w-3.5" />
+                    <span className="text-xs font-medium">Complete</span>
+                  </div>
+                )}
               </div>
-            )}
+              <div 
+                className="relative rounded-lg border bg-zinc-950 dark:bg-zinc-900 min-h-[120px] max-h-[280px] overflow-auto scroll-smooth"
+                ref={(el) => {
+                  if (el && isTesting) {
+                    el.scrollTop = el.scrollHeight
+                  }
+                }}
+              >
+                <div className="p-4">
+                  {isTesting && !testResponse && (
+                    <div className="flex items-center gap-2 text-zinc-400">
+                      <div className="flex gap-1">
+                        <span className="w-2 h-2 bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                        <span className="w-2 h-2 bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                        <span className="w-2 h-2 bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                      </div>
+                      <span className="text-sm">Waiting for response...</span>
+                    </div>
+                  )}
+                  {testResponse && (
+                    <div className="text-sm font-mono text-zinc-100 whitespace-pre-wrap leading-relaxed">
+                      {testResponse}
+                      {isTesting && (
+                        <span className="inline-block w-2 h-4 ml-0.5 bg-green-400 animate-pulse" />
+                      )}
+                    </div>
+                  )}
+                  {!isTesting && !testResponse && (
+                    <span className="text-zinc-500 text-sm italic">Response will appear here...</span>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

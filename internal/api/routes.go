@@ -74,11 +74,14 @@ func (s *Server) setupRoutes() {
 	// Handle other Ollama endpoints (with optional auth - can work without API key)
 	apiGroup := s.engine.Group("/api")
 	apiGroup.Use(middleware.RequestSizeLimitMiddleware(s.cfg.MaxRequestSize))
+	apiGroup.Use(s.conditionalAuthMiddleware())
 	{
 		apiGroup.GET("/tags", ollamaHandlers.Tags)
 		apiGroup.POST("/chat", ollamaHandlers.Chat)
 		apiGroup.POST("/generate", ollamaHandlers.Generate)
 		apiGroup.POST("/show", ollamaHandlers.Show)
+		// OpenCode compatibility: /api/messages -> Claude messages handler
+		apiGroup.POST("/messages", claudeCodeHandlers.ClaudeMessages)
 	}
 
 	// Also support /ollama/api/* paths

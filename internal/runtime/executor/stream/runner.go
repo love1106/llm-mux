@@ -241,7 +241,9 @@ func RunSSEStream(
 					}
 				}
 			} else if cfg.PassthroughOnEmpty {
-				if !pipeline.SendData(payload) {
+				// Append newline since scanner.ScanLines strips it
+				payloadWithNewline := append(payload, '\n')
+				if !pipeline.SendData(payloadWithNewline) {
 					return nil
 				}
 			}
