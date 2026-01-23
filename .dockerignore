@@ -28,3 +28,7 @@ bin/*
 .claude/*
 .vscode/*
 .serena/*
+
+# Node modules (rebuilt in Docker)
+ui/node_modules/*
+node_modules/*
