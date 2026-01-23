@@ -106,7 +106,38 @@ ANTHROPIC_BASE_URL="http://localhost:8317" ANTHROPIC_API_KEY="unused" \
   claude --print "Hello"
 ```
 
-**Note:** Third-party clients (OpenCode, AI SDK) may encounter "credential only authorized for Claude Code" errors due to Anthropic API restrictions.
+## OpenCode Integration
+
+Use llm-mux as a backend for [OpenCode](https://github.com/opencode-ai/opencode):
+
+```bash
+export ANTHROPIC_BASE_URL="http://localhost:8317"
+export ANTHROPIC_API_KEY="unused"
+opencode
+```
+
+Or configure in `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "providers": {
+    "anthropic": {
+      "apiKey": "unused"
+    }
+  },
+  "agents": {
+    "coder": {
+      "model": "anthropic/claude-sonnet-4-20250514"
+    }
+  }
+}
+```
+
+Then run with base URL override:
+
+```bash
+ANTHROPIC_BASE_URL="http://localhost:8317" opencode
+```
 
 ## Documentation
 
