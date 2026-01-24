@@ -134,8 +134,11 @@ func (m *Manager) snapshotAuths() []*Auth {
 
 // shouldRefresh determines if an auth needs refresh based on expiration and refresh rules.
 func (m *Manager) shouldRefresh(a *Auth, now time.Time) bool {
-	if a == nil || a.Disabled {
-		log.Debugf("[shouldRefresh] auth=%s skip: nil or disabled", a.ID)
+	if a == nil {
+		return false
+	}
+	if a.Disabled {
+		log.Debugf("[shouldRefresh] auth=%s skip: disabled", a.ID)
 		return false
 	}
 	if !a.NextRefreshAfter.IsZero() && now.Before(a.NextRefreshAfter) {
