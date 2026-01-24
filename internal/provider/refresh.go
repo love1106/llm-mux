@@ -81,20 +81,26 @@ func (m *Manager) checkRefreshes(ctx context.Context) {
 	} else {
 		snapshot = m.snapshotAuths()
 	}
+	log.Debugf("[refresh] checking %d auths", len(snapshot))
 	for _, a := range snapshot {
 		typ, _ := a.AccountInfo()
 		if typ != "api_key" {
-			if !m.shouldRefresh(a, now) {
+			shouldRefresh := m.shouldRefresh(a, now)
+			expiry, hasExpiry := a.ExpirationTime()
+			log.Debugf("[refresh] auth=%s provider=%s type=%s shouldRefresh=%v hasExpiry=%v expiry=%s",
+				a.ID, a.Provider, typ, shouldRefresh, hasExpiry, expiry.Format(time.RFC3339))
+			if !shouldRefresh {
 				continue
 			}
-			log.Debugf("checking refresh for %s, %s, %s", a.Provider, a.ID, typ)
+			log.Infof("[refresh] triggering refresh for provider=%s auth=%s type=%s", a.Provider, a.ID, typ)
 
 		if exec := m.executorFor(a.Provider); exec == nil {
+			log.Warnf("[refresh] no executor found for provider=%s auth=%s", a.Provider, a.ID)
 			continue
 		}
 		if m.refreshSem != nil {
 			if !m.refreshSem.TryAcquire(1) {
-				log.Debugf("refresh skipped for %s: semaphore full, will retry next interval", a.ID)
+				log.Debugf("[refresh] skipped auth=%s: semaphore full", a.ID)
 				continue
 			}
 			if !m.markRefreshPending(a.ID, now) {
@@ -129,13 +135,17 @@ func (m *Manager) snapshotAuths() []*Auth {
 // shouldRefresh determines if an auth needs refresh based on expiration and refresh rules.
 func (m *Manager) shouldRefresh(a *Auth, now time.Time) bool {
 	if a == nil || a.Disabled {
+		log.Debugf("[shouldRefresh] auth=%s skip: nil or disabled", a.ID)
 		return false
 	}
 	if !a.NextRefreshAfter.IsZero() && now.Before(a.NextRefreshAfter) {
+		log.Debugf("[shouldRefresh] auth=%s skip: waiting until %s", a.ID, a.NextRefreshAfter.Format(time.RFC3339))
 		return false
 	}
 	if evaluator, ok := a.Runtime.(RefreshEvaluator); ok && evaluator != nil {
-		return evaluator.ShouldRefresh(now, a)
+		result := evaluator.ShouldRefresh(now, a)
+		log.Debugf("[shouldRefresh] auth=%s evaluator returned %v", a.ID, result)
+		return result
 	}
 
 	lastRefresh := a.LastRefreshedAt
@@ -146,39 +156,60 @@ func (m *Manager) shouldRefresh(a *Auth, now time.Time) bool {
 	}
 
 	expiry, hasExpiry := a.ExpirationTime()
+	log.Debugf("[shouldRefresh] auth=%s lastRefresh=%s expiry=%s hasExpiry=%v",
+		a.ID, lastRefresh.Format(time.RFC3339), expiry.Format(time.RFC3339), hasExpiry)
 
 	if interval := authPreferredInterval(a); interval > 0 {
 		if hasExpiry && !expiry.IsZero() {
 			if !expiry.After(now) {
+				log.Debugf("[shouldRefresh] auth=%s refresh: expired (interval mode)", a.ID)
 				return true
 			}
 			if expiry.Sub(now) <= interval {
+				log.Debugf("[shouldRefresh] auth=%s refresh: within interval %v of expiry", a.ID, interval)
 				return true
 			}
 		}
 		if lastRefresh.IsZero() {
+			log.Debugf("[shouldRefresh] auth=%s refresh: no lastRefresh (interval mode)", a.ID)
 			return true
 		}
-		return now.Sub(lastRefresh) >= interval
+		shouldRefresh := now.Sub(lastRefresh) >= interval
+		log.Debugf("[shouldRefresh] auth=%s interval check: sinceLastRefresh=%v interval=%v result=%v",
+			a.ID, now.Sub(lastRefresh), interval, shouldRefresh)
+		return shouldRefresh
 	}
 
 	provider := strings.ToLower(a.Provider)
 	lead := ProviderRefreshLead(provider, a.Runtime)
 	if lead == nil {
+		log.Debugf("[shouldRefresh] auth=%s skip: no refresh lead for provider %s", a.ID, provider)
 		return false
 	}
+	log.Infof("[shouldRefresh] auth=%s provider=%s lead=%v", a.ID, provider, *lead)
 	if *lead <= 0 {
 		if hasExpiry && !expiry.IsZero() {
-			return now.After(expiry)
+			result := now.After(expiry)
+			log.Debugf("[shouldRefresh] auth=%s lead<=0, expired check: %v", a.ID, result)
+			return result
 		}
 		return false
 	}
 	if hasExpiry && !expiry.IsZero() {
-		return time.Until(expiry) <= *lead
+		timeUntilExpiry := time.Until(expiry)
+		shouldRefresh := timeUntilExpiry <= *lead
+		log.Debugf("[shouldRefresh] auth=%s timeUntilExpiry=%v lead=%v shouldRefresh=%v",
+			a.ID, timeUntilExpiry, *lead, shouldRefresh)
+		return shouldRefresh
 	}
 	if !lastRefresh.IsZero() {
-		return now.Sub(lastRefresh) >= *lead
+		sinceLastRefresh := now.Sub(lastRefresh)
+		shouldRefresh := sinceLastRefresh >= *lead
+		log.Debugf("[shouldRefresh] auth=%s sinceLastRefresh=%v lead=%v shouldRefresh=%v",
+			a.ID, sinceLastRefresh, *lead, shouldRefresh)
+		return shouldRefresh
 	}
+	log.Debugf("[shouldRefresh] auth=%s refresh: fallback true", a.ID)
 	return true
 }
 

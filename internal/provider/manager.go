@@ -838,6 +838,7 @@ func (m *Manager) markRefreshPending(id string, now time.Time) bool {
 }
 
 func (m *Manager) refreshAuth(ctx context.Context, id string) {
+	log.Debugf("[refreshAuth] starting refresh for id=%s", id)
 	m.mu.RLock()
 	auth := m.auths[id]
 	var exec ProviderExecutor
@@ -846,18 +847,17 @@ func (m *Manager) refreshAuth(ctx context.Context, id string) {
 	}
 	m.mu.RUnlock()
 	if auth == nil {
-		log.Warnf("refreshAuth: auth not found for id=%s", id)
+		log.Warnf("[refreshAuth] auth not found for id=%s", id)
 		return
 	}
 	if exec == nil {
-		log.Warnf("refreshAuth: executor not found for provider=%s id=%s", auth.Provider, id)
+		log.Warnf("[refreshAuth] executor not found for provider=%s id=%s", auth.Provider, id)
 		return
 	}
-	log.Infof("refreshAuth: starting refresh for provider=%s id=%s metadata_keys=%v", auth.Provider, id, metadataKeys(auth.Metadata))
+	log.Debugf("[refreshAuth] calling exec.Refresh for provider=%s id=%s", auth.Provider, id)
 	cloned := auth.Clone()
 	authUpdatedAt := auth.UpdatedAt
 	updated, err := exec.Refresh(ctx, cloned)
-	log.Debugf("refreshed %s, %s, %v", auth.Provider, auth.ID, err)
 	now := time.Now()
 	if err != nil {
 		m.mu.Lock()
@@ -899,6 +899,7 @@ func (m *Manager) refreshAuth(ctx context.Context, id string) {
 	updated.NextRefreshAfter = time.Time{}
 	updated.LastError = nil
 	updated.UpdatedAt = now
+	log.Infof("[refreshAuth] success for provider=%s id=%s", auth.Provider, id)
 	_, _ = m.Update(ctx, updated)
 }
 

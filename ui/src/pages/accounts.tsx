@@ -477,6 +477,12 @@ export function AccountsPage() {
                         <p className="font-medium">{new Date(account.last_refresh).toLocaleString()}</p>
                       </div>
                     )}
+                    {account.expires_at && (
+                      <div>
+                        <span className="text-muted-foreground">Token Expires:</span>
+                        <p className="font-medium">{new Date(account.expires_at).toLocaleString()}</p>
+                      </div>
+                    )}
                   </div>
                   {account.status_message && (
                     <p className="mt-2 text-sm text-muted-foreground">{account.status_message}</p>

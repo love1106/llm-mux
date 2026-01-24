@@ -280,6 +280,9 @@ func (h *Handler) buildAuthFileEntry(auth *provider.Auth) gin.H {
 	if !auth.LastRefreshedAt.IsZero() {
 		entry["last_refresh"] = auth.LastRefreshedAt
 	}
+	if expiry, hasExpiry := auth.ExpirationTime(); hasExpiry && !expiry.IsZero() {
+		entry["expires_at"] = expiry
+	}
 	if path != "" {
 		entry["path"] = path
 		entry["source"] = "file"

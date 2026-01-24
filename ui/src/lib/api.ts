@@ -55,6 +55,7 @@ export interface AuthFile {
   status_message?: string
   disabled: boolean
   last_refresh?: string
+  expires_at?: string
   quota_state?: QuotaState
 }
 
