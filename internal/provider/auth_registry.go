@@ -72,6 +72,11 @@ type AuthRegistry struct {
 
 	getExecutor func(provider string) ProviderExecutor
 
+	// refreshFunc is the unified refresh callback that delegates to Manager.
+	// When set, doRefresh will use this instead of refreshing directly.
+	// This ensures all refreshes go through a single path that writes to file.
+	refreshFunc func(ctx context.Context, authID string) error
+
 	hook Hook
 
 	indexCounter uint64
@@ -103,6 +108,10 @@ func NewAuthRegistry(store Store, hook Hook) *AuthRegistry {
 
 func (r *AuthRegistry) SetExecutorProvider(fn func(provider string) ProviderExecutor) {
 	r.getExecutor = fn
+}
+
+func (r *AuthRegistry) SetRefreshFunc(fn func(ctx context.Context, authID string) error) {
+	r.refreshFunc = fn
 }
 
 func (r *AuthRegistry) Start() {
@@ -526,6 +535,16 @@ func (r *AuthRegistry) doRefresh(authID string) {
 		return
 	}
 	defer entry.Token.FinishRefresh()
+
+	if r.refreshFunc != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := r.refreshFunc(ctx, authID); err != nil {
+			log.Warnf("auth_registry: delegated refresh failed for %s: %v", authID, err)
+			r.scheduleRefresh(authID, time.Now().Add(time.Minute))
+		}
+		return
+	}
 
 	if r.getExecutor == nil {
 		return

@@ -135,6 +135,7 @@ func NewManager(store Store, selector Selector, hook Hook) *Manager {
 	}
 	m.registry = NewAuthRegistry(store, hook)
 	m.registry.SetExecutorProvider(m.executorFor)
+	m.registry.SetRefreshFunc(m.RefreshAuthByID)
 	m.registry.Start()
 	if lc, ok := selector.(SelectorLifecycle); ok {
 		lc.Start()
@@ -839,17 +840,27 @@ func (m *Manager) markRefreshPending(id string, now time.Time) bool {
 
 func (m *Manager) refreshAuth(ctx context.Context, id string) {
 	log.Debugf("[refreshAuth] starting refresh for id=%s", id)
-	m.mu.RLock()
-	auth := m.auths[id]
+	var auth *Auth
 	var exec ProviderExecutor
-	if auth != nil {
-		exec = m.executors[auth.Provider]
+
+	if m.registry != nil {
+		if entry := m.registry.GetEntry(id); entry != nil {
+			auth = entry.ToAuth()
+		}
 	}
-	m.mu.RUnlock()
+	if auth == nil {
+		m.mu.RLock()
+		auth = m.auths[id]
+		m.mu.RUnlock()
+	}
 	if auth == nil {
 		log.Warnf("[refreshAuth] auth not found for id=%s", id)
 		return
 	}
+
+	m.mu.RLock()
+	exec = m.executors[auth.Provider]
+	m.mu.RUnlock()
 	if exec == nil {
 		log.Warnf("[refreshAuth] executor not found for provider=%s id=%s", auth.Provider, id)
 		return
