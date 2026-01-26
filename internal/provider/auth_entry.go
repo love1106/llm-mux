@@ -546,16 +546,9 @@ func NewAuthEntry(auth *Auth) *AuthEntry {
 		entry.Quota.SetCooldownUntil(auth.NextRetryAfter)
 	}
 
-	// Initialize token expiry from metadata
 	if meta.Metadata != nil {
 		if ts, ok := expirationFromMap(meta.Metadata); ok {
 			entry.Token.SetExpiresAt(ts)
-			// Schedule refresh 5 minutes before expiry
-			refreshAt := ts.Add(-5 * time.Minute)
-			if refreshAt.Before(time.Now()) {
-				refreshAt = time.Now().Add(5 * time.Second)
-			}
-			entry.Token.SetRefreshAt(refreshAt)
 		}
 	}
 

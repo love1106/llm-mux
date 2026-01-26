@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"container/heap"
 	"context"
 	"sync"
 	"time"
@@ -11,10 +10,10 @@ import (
 )
 
 const (
-	numAuthShards         = 32
-	persistDebounceMs     = 500
-	persistQueueSize      = 256
-	refreshHeapInitialCap = 64
+	numAuthShards     = 32
+	persistDebounceMs = 500
+	persistQueueSize  = 256
+	refreshInterval   = 3 * time.Hour
 )
 
 type authShard struct {
@@ -22,44 +21,8 @@ type authShard struct {
 	entries map[string]*AuthEntry
 }
 
-type refreshHeapEntry struct {
-	authID    string
-	refreshAt time.Time
-	index     int
-}
-
-type refreshHeap []*refreshHeapEntry
-
-func (h refreshHeap) Len() int           { return len(h) }
-func (h refreshHeap) Less(i, j int) bool { return h[i].refreshAt.Before(h[j].refreshAt) }
-func (h refreshHeap) Swap(i, j int) {
-	h[i], h[j] = h[j], h[i]
-	h[i].index = i
-	h[j].index = j
-}
-func (h *refreshHeap) Push(x any) {
-	n := len(*h)
-	entry := x.(*refreshHeapEntry)
-	entry.index = n
-	*h = append(*h, entry)
-}
-func (h *refreshHeap) Pop() any {
-	old := *h
-	n := len(old)
-	entry := old[n-1]
-	old[n-1] = nil
-	entry.index = -1
-	*h = old[0 : n-1]
-	return entry
-}
-
 type AuthRegistry struct {
 	shards [numAuthShards]*authShard
-
-	refreshMu      sync.Mutex
-	refreshHeap    refreshHeap
-	refreshEntries map[string]*refreshHeapEntry
-	refreshSignal  chan struct{}
 
 	store        Store
 	persistQueue chan string
@@ -88,21 +51,17 @@ func NewAuthRegistry(store Store, hook Hook) *AuthRegistry {
 		hook = NoopHook{}
 	}
 	r := &AuthRegistry{
-		store:          store,
-		hook:           hook,
-		refreshHeap:    make(refreshHeap, 0, refreshHeapInitialCap),
-		refreshEntries: make(map[string]*refreshHeapEntry),
-		refreshSignal:  make(chan struct{}, 1),
-		persistQueue:   make(chan string, persistQueueSize),
-		persistBatch:   make(map[string]struct{}),
-		stopCh:         make(chan struct{}),
+		store:        store,
+		hook:         hook,
+		persistQueue: make(chan string, persistQueueSize),
+		persistBatch: make(map[string]struct{}),
+		stopCh:       make(chan struct{}),
 	}
 	for i := range r.shards {
 		r.shards[i] = &authShard{
 			entries: make(map[string]*AuthEntry),
 		}
 	}
-	heap.Init(&r.refreshHeap)
 	return r
 }
 
@@ -188,7 +147,6 @@ func (r *AuthRegistry) Register(ctx context.Context, auth *Auth) (*Auth, error) 
 	shard.entries[auth.ID] = entry
 	shard.mu.Unlock()
 
-	r.scheduleRefreshIfNeeded(entry)
 	r.markDirty(auth.ID)
 
 	result := entry.ToAuth()
@@ -257,6 +215,12 @@ func (r *AuthRegistry) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 	entry.SetDisabled(auth.Disabled)
 	entry.SetUnavailable(auth.Unavailable)
 
+	if auth.Metadata != nil {
+		if ts, ok := expirationFromMap(auth.Metadata); ok && !ts.IsZero() {
+			entry.Token.SetExpiresAt(ts)
+		}
+	}
+
 	if len(auth.ModelStates) > 0 {
 		entry.UpdateAllModelStates(func(old *ModelStatesSnapshot) *ModelStatesSnapshot {
 			newSnapshot := &ModelStatesSnapshot{
@@ -297,7 +261,6 @@ func (r *AuthRegistry) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 		})
 	}
 
-	r.scheduleRefreshIfNeeded(entry)
 	r.markDirty(auth.ID)
 
 	result := entry.ToAuth()
@@ -314,8 +277,6 @@ func (r *AuthRegistry) Delete(ctx context.Context, id string) error {
 	shard.mu.Lock()
 	delete(shard.entries, id)
 	shard.mu.Unlock()
-
-	r.unscheduleRefresh(id)
 
 	if r.store != nil {
 		return r.store.Delete(ctx, id)
@@ -396,133 +357,63 @@ func (r *AuthRegistry) Load(ctx context.Context) error {
 		shard.mu.Lock()
 		shard.entries[auth.ID] = entry
 		shard.mu.Unlock()
-
-		r.scheduleRefreshIfNeeded(entry)
 	}
 
 	return nil
 }
 
-func (r *AuthRegistry) scheduleRefreshIfNeeded(entry *AuthEntry) {
-	if entry == nil {
-		return
-	}
-
-	meta := entry.Metadata()
-	if meta == nil || meta.Metadata == nil {
-		return
-	}
-
-	_, hasAccessToken := meta.Metadata["access_token"]
-	_, hasRefreshToken := meta.Metadata["refresh_token"]
-	if !hasAccessToken || !hasRefreshToken {
-		return
-	}
-
-	refreshAt := entry.Token.GetRefreshAt()
-	if refreshAt.IsZero() {
-		expiresAt := entry.Token.GetExpiresAt()
-		if expiresAt.IsZero() {
-			return
-		}
-		refreshAt = expiresAt.Add(-5 * time.Minute)
-		if refreshAt.Before(time.Now()) {
-			refreshAt = time.Now().Add(5 * time.Second)
-		}
-		entry.Token.SetRefreshAt(refreshAt)
-	}
-
-	r.scheduleRefresh(entry.ID(), refreshAt)
-}
-
-func (r *AuthRegistry) scheduleRefresh(authID string, at time.Time) {
-	r.refreshMu.Lock()
-	defer r.refreshMu.Unlock()
-
-	if existing, ok := r.refreshEntries[authID]; ok {
-		heap.Remove(&r.refreshHeap, existing.index)
-	}
-
-	entry := &refreshHeapEntry{
-		authID:    authID,
-		refreshAt: at,
-	}
-	r.refreshEntries[authID] = entry
-	heap.Push(&r.refreshHeap, entry)
-
-	select {
-	case r.refreshSignal <- struct{}{}:
-	default:
-	}
-}
-
-func (r *AuthRegistry) unscheduleRefresh(authID string) {
-	r.refreshMu.Lock()
-	defer r.refreshMu.Unlock()
-
-	if entry, ok := r.refreshEntries[authID]; ok {
-		heap.Remove(&r.refreshHeap, entry.index)
-		delete(r.refreshEntries, authID)
-	}
-}
-
 func (r *AuthRegistry) refreshLoop() {
 	defer r.wg.Done()
 
-	timer := time.NewTimer(time.Hour)
-	defer timer.Stop()
+	ticker := time.NewTicker(refreshInterval)
+	defer ticker.Stop()
+
+	log.Infof("auth_registry: refresh cron started, interval=%v", refreshInterval)
 
 	for {
-		r.refreshMu.Lock()
-		var nextRefresh time.Time
-		if r.refreshHeap.Len() > 0 {
-			nextRefresh = r.refreshHeap[0].refreshAt
-		}
-		r.refreshMu.Unlock()
-
-		var wait time.Duration
-		if nextRefresh.IsZero() {
-			wait = time.Hour
-		} else {
-			wait = time.Until(nextRefresh)
-			if wait < 0 {
-				wait = 0
-			}
-		}
-
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-		timer.Reset(wait)
-
 		select {
 		case <-r.stopCh:
 			return
-		case <-r.refreshSignal:
-			continue
-		case <-timer.C:
-			if !nextRefresh.IsZero() {
-				r.processNextRefresh()
-			}
+		case <-ticker.C:
+			r.refreshAllAuths()
 		}
 	}
 }
 
-func (r *AuthRegistry) processNextRefresh() {
-	r.refreshMu.Lock()
-	if r.refreshHeap.Len() == 0 {
-		r.refreshMu.Unlock()
+func (r *AuthRegistry) refreshAllAuths() {
+	var authIDs []string
+	for _, shard := range r.shards {
+		shard.mu.RLock()
+		for _, entry := range shard.entries {
+			if r.needsRefresh(entry) {
+				authIDs = append(authIDs, entry.ID())
+			}
+		}
+		shard.mu.RUnlock()
+	}
+
+	if len(authIDs) == 0 {
+		log.Debugf("auth_registry: refresh cron tick, no auths need refresh")
 		return
 	}
 
-	entry := heap.Pop(&r.refreshHeap).(*refreshHeapEntry)
-	delete(r.refreshEntries, entry.authID)
-	r.refreshMu.Unlock()
+	log.Infof("auth_registry: refresh cron tick, refreshing %d auths", len(authIDs))
+	for _, authID := range authIDs {
+		go r.doRefresh(authID)
+	}
+}
 
-	go r.doRefresh(entry.authID)
+func (r *AuthRegistry) needsRefresh(entry *AuthEntry) bool {
+	if entry == nil {
+		return false
+	}
+	meta := entry.Metadata()
+	if meta == nil || meta.Metadata == nil {
+		return false
+	}
+	_, hasAccessToken := meta.Metadata["access_token"]
+	_, hasRefreshToken := meta.Metadata["refresh_token"]
+	return hasAccessToken && hasRefreshToken
 }
 
 func (r *AuthRegistry) doRefresh(authID string) {
@@ -540,8 +431,7 @@ func (r *AuthRegistry) doRefresh(authID string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := r.refreshFunc(ctx, authID); err != nil {
-			log.Warnf("auth_registry: delegated refresh failed for %s: %v", authID, err)
-			r.scheduleRefresh(authID, time.Now().Add(time.Minute))
+			log.Warnf("auth_registry: refresh failed for %s: %v", authID, err)
 		}
 		return
 	}
@@ -578,12 +468,6 @@ func (r *AuthRegistry) doRefresh(authID string) {
 
 			if ts, ok := expirationFromMap(updated.Metadata); ok {
 				entry.Token.SetExpiresAt(ts)
-				refreshAt := ts.Add(-5 * time.Minute)
-				if refreshAt.Before(time.Now()) {
-					refreshAt = time.Now().Add(5 * time.Second)
-				}
-				entry.Token.SetRefreshAt(refreshAt)
-				r.scheduleRefresh(authID, refreshAt)
 			}
 
 			r.markDirty(authID)
@@ -600,8 +484,7 @@ func (r *AuthRegistry) doRefresh(authID string) {
 		}
 	}
 
-	log.Warnf("auth_registry: failed refresh %s after 3 attempts, retry in 1min", authID)
-	r.scheduleRefresh(authID, time.Now().Add(time.Minute))
+	log.Warnf("auth_registry: failed refresh %s after 3 attempts", authID)
 }
 
 func (r *AuthRegistry) markDirty(authID string) {

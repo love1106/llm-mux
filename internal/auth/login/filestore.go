@@ -190,7 +190,7 @@ func (s *FileTokenStore) readAuthFile(path, baseDir string) (*provider.Auth, err
 		Metadata:         metadata,
 		CreatedAt:        info.ModTime(),
 		UpdatedAt:        info.ModTime(),
-		LastRefreshedAt:  time.Time{},
+		LastRefreshedAt:  s.lastRefreshFromMetadata(metadata),
 		NextRefreshAfter: time.Time{},
 	}
 	if email, ok := metadata["email"].(string); ok && email != "" {
@@ -261,6 +261,23 @@ func (s *FileTokenStore) baseDirSnapshot() string {
 	s.dirLock.RLock()
 	defer s.dirLock.RUnlock()
 	return s.baseDir
+}
+
+func (s *FileTokenStore) lastRefreshFromMetadata(metadata map[string]any) time.Time {
+	keys := []string{"last_refresh", "lastRefresh", "last_refreshed_at"}
+	for _, key := range keys {
+		if v, ok := metadata[key]; ok {
+			switch val := v.(type) {
+			case string:
+				if t, err := time.Parse(time.RFC3339, val); err == nil {
+					return t
+				}
+			case time.Time:
+				return val
+			}
+		}
+	}
+	return time.Time{}
 }
 
 func jsonEqual(a, b []byte) bool {
