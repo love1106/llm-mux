@@ -3,6 +3,7 @@ echo "Stopping servers..."
 
 pkill -f "llm-mux serve" 2>/dev/null && echo "API stopped" || echo "API not running"
 pkill -f "vite.*8318" 2>/dev/null && echo "UI stopped" || echo "UI not running"
+pkill -f "scripts/keepalive.sh" 2>/dev/null && echo "Keepalive stopped" || echo "Keepalive not running"
 
 sleep 1
 if lsof -i :8317 &>/dev/null || lsof -i :8318 &>/dev/null; then

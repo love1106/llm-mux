@@ -16,6 +16,9 @@ else
   echo "UI server started on :8318"
 fi
 
+nohup "$ROOT/scripts/keepalive.sh" > /tmp/llm-mux-keepalive.log 2>&1 &
+echo "Keepalive watchdog started in background"
+
 sleep 1
 echo ""
-echo "Logs: /tmp/llm-mux-api.log, /tmp/llm-mux-ui.log"
+echo "Logs: /tmp/llm-mux-api.log, /tmp/llm-mux-ui.log, /tmp/llm-mux-keepalive.log"
