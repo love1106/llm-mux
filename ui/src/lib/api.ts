@@ -100,9 +100,10 @@ export const managementApi = {
   getDebug: () => api.get<ApiResponse<{ debug: boolean }>>('/debug'),
   setDebug: (value: boolean) => api.put('/debug', { value }),
 
-  oauthStart: (provider: string) => api.post<{ auth_url: string; state: string }>('/oauth/start', { provider }),
+  oauthStart: (provider: string, manual?: boolean) => api.post<{ auth_url: string; state: string }>('/oauth/start', { provider, manual }),
   oauthStatus: (state: string) => api.get<{ status: string }>(`/oauth/status/${state}`),
   oauthCancel: (state: string) => api.post(`/oauth/cancel/${state}`),
+  oauthComplete: (state: string, code: string) => api.post<{ status: string; error?: string }>('/oauth/complete', { state, code }),
 }
 
 export default api

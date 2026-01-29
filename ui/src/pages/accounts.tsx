@@ -44,14 +44,16 @@ const providerColors: Record<string, string> = {
 }
 
 const OAUTH_PROVIDERS = [
-  { id: 'claude', name: 'Claude', description: 'Anthropic Claude Pro/Max', icon: '🟣', flowType: 'oauth' },
-  { id: 'gemini', name: 'Gemini', description: 'Google Gemini CLI', icon: '🔵', flowType: 'oauth' },
-  { id: 'antigravity', name: 'Antigravity', description: 'Google Cloud AI Companion', icon: '🌐', flowType: 'oauth' },
-  { id: 'copilot', name: 'GitHub Copilot', description: 'GitHub Copilot subscription', icon: '🐙', flowType: 'device' },
-  { id: 'qwen', name: 'Qwen', description: 'Alibaba Qwen', icon: '🟠', flowType: 'device' },
-  { id: 'codex', name: 'Codex', description: 'OpenAI Codex CLI', icon: '🟢', flowType: 'oauth' },
-  { id: 'iflow', name: 'iFlow', description: 'iFlow AI', icon: '⚡', flowType: 'oauth' },
+  { id: 'claude', name: 'Claude', description: 'Anthropic Claude Pro/Max', icon: '🟣', flowType: 'oauth', supportsManual: true },
+  { id: 'gemini', name: 'Gemini', description: 'Google Gemini CLI', icon: '🔵', flowType: 'oauth', supportsManual: false },
+  { id: 'antigravity', name: 'Antigravity', description: 'Google Cloud AI Companion', icon: '🌐', flowType: 'oauth', supportsManual: false },
+  { id: 'copilot', name: 'GitHub Copilot', description: 'GitHub Copilot subscription', icon: '🐙', flowType: 'device', supportsManual: false },
+  { id: 'qwen', name: 'Qwen', description: 'Alibaba Qwen', icon: '🟠', flowType: 'device', supportsManual: false },
+  { id: 'codex', name: 'Codex', description: 'OpenAI Codex CLI', icon: '🟢', flowType: 'oauth', supportsManual: true },
+  { id: 'iflow', name: 'iFlow', description: 'iFlow AI', icon: '⚡', flowType: 'oauth', supportsManual: false },
 ]
+
+const MANUAL_OAUTH_PROVIDERS = OAUTH_PROVIDERS.filter(p => p.supportsManual)
 
 export function AccountsPage() {
   const queryClient = useQueryClient()
@@ -65,9 +67,14 @@ export function AccountsPage() {
   const [jsonContent, setJsonContent] = useState<string>('')
   const [jsonFileName, setJsonFileName] = useState<string>('')
   const [copied, setCopied] = useState(false)
-  const [addMode, setAddMode] = useState<'oauth' | 'import'>('oauth')
+  const [addMode, setAddMode] = useState<'oauth' | 'manual' | 'import'>('oauth')
   const [importJson, setImportJson] = useState('')
   const [isImporting, setIsImporting] = useState(false)
+  const [manualAuthUrl, setManualAuthUrl] = useState<string | null>(null)
+  const [manualState, setManualState] = useState<string | null>(null)
+  const [manualCode, setManualCode] = useState('')
+  const [isSubmittingCode, setIsSubmittingCode] = useState(false)
+  const [urlCopied, setUrlCopied] = useState(false)
   const [testDialogOpen, setTestDialogOpen] = useState(false)
   const [testResponse, setTestResponse] = useState('')
   const [isTesting, setIsTesting] = useState(false)
@@ -112,6 +119,10 @@ export function AccountsPage() {
     setSelectedProvider('')
     setAddMode('oauth')
     setImportJson('')
+    setManualAuthUrl(null)
+    setManualState(null)
+    setManualCode('')
+    setUrlCopied(false)
   }
 
   const handleImportJson = async () => {
@@ -269,6 +280,70 @@ export function AccountsPage() {
     } catch {
       toast.error('Failed to start OAuth flow')
       setOauthStatus('error')
+    }
+  }
+
+  const startManualOAuth = async () => {
+    if (!selectedProvider) return
+    try {
+      const response = await managementApi.oauthStart(selectedProvider, true)
+      const data = response.data as any
+      setManualState(data.state)
+      setManualAuthUrl(data.auth_url)
+      setUrlCopied(false)
+    } catch {
+      toast.error('Failed to generate OAuth URL')
+    }
+  }
+
+  const copyAuthUrl = async () => {
+    if (!manualAuthUrl) return
+    try {
+      await navigator.clipboard.writeText(manualAuthUrl)
+      setUrlCopied(true)
+      toast.success('URL copied to clipboard')
+      setTimeout(() => setUrlCopied(false), 2000)
+    } catch {
+      toast.error('Failed to copy URL')
+    }
+  }
+
+  const parseCodeFromInput = (input: string): string => {
+    const trimmed = input.trim()
+    if (trimmed.includes('?code=') || trimmed.includes('&code=')) {
+      try {
+        const url = new URL(trimmed)
+        return url.searchParams.get('code') || trimmed
+      } catch {
+        const match = trimmed.match(/[?&]code=([^&#]+)/)
+        return match ? match[1] : trimmed
+      }
+    }
+    return trimmed
+  }
+
+  const submitManualCode = async () => {
+    if (!manualState || !manualCode.trim()) return
+    const code = parseCodeFromInput(manualCode)
+    if (!code) {
+      toast.error('Please enter the callback URL or code')
+      return
+    }
+    setIsSubmittingCode(true)
+    try {
+      const response = await managementApi.oauthComplete(manualState, code)
+      if (response.data.status === 'ok') {
+        toast.success('Account connected successfully')
+        queryClient.invalidateQueries({ queryKey: ['auth-files'] })
+        setOauthDialogOpen(false)
+        resetOauthState()
+      } else {
+        toast.error(response.data.error || 'Failed to complete authentication')
+      }
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || 'Failed to complete authentication')
+    } finally {
+      setIsSubmittingCode(false)
     }
   }
 
@@ -538,6 +613,14 @@ export function AccountsPage() {
                     OAuth Login
                   </button>
                   <button
+                    onClick={() => setAddMode('manual')}
+                    className={`px-4 py-2 text-sm font-medium transition-colors ${
+                      addMode === 'manual' ? 'border-b-2 border-primary text-primary' : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    OAuth Token
+                  </button>
+                  <button
                     onClick={() => setAddMode('import')}
                     className={`px-4 py-2 text-sm font-medium transition-colors ${
                       addMode === 'import' ? 'border-b-2 border-primary text-primary' : 'text-muted-foreground hover:text-foreground'
@@ -574,6 +657,81 @@ export function AccountsPage() {
                       Connect {selectedProvider ? OAUTH_PROVIDERS.find(p => p.id === selectedProvider)?.name : 'Account'}
                     </Button>
                   </>
+                )}
+
+                {addMode === 'manual' && (
+                  <div className="space-y-3">
+                    <p className="text-sm text-muted-foreground">
+                      Manual OAuth flow for remote/headless setups. Generate URL, login in browser, paste callback URL back.
+                    </p>
+                    
+                    {!manualAuthUrl ? (
+                      <>
+                        <div className="grid gap-2">
+                          {MANUAL_OAUTH_PROVIDERS.map((provider) => (
+                            <button
+                              key={provider.id}
+                              onClick={() => setSelectedProvider(provider.id)}
+                              className={`flex items-center gap-3 p-3 rounded-lg border text-left transition-colors hover:bg-accent/50 ${
+                                selectedProvider === provider.id ? 'border-primary bg-primary/10 ring-1 ring-primary' : 'border-input bg-card'
+                              }`}
+                            >
+                              <span className="text-2xl">{provider.icon}</span>
+                              <div className="flex-1 min-w-0">
+                                <div className="font-medium text-foreground">{provider.name}</div>
+                                <div className="text-xs text-muted-foreground truncate">{provider.description}</div>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                        <Button onClick={startManualOAuth} disabled={!selectedProvider} className="w-full">
+                          Generate Auth URL
+                        </Button>
+                      </>
+                    ) : (
+                      <div className="space-y-4">
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium">1. Copy this URL and open in your browser:</label>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={manualAuthUrl}
+                              readOnly
+                              className="flex-1 p-2 rounded-md border bg-muted font-mono text-xs truncate"
+                            />
+                            <Button variant="outline" size="sm" onClick={copyAuthUrl}>
+                              {urlCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                            </Button>
+                            <Button variant="outline" size="sm" onClick={() => window.open(manualAuthUrl, '_blank')}>
+                              <ExternalLink className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                        
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium">2. After login, copy the Authentication Code:</label>
+                          <p className="text-xs text-muted-foreground">
+                            You'll see a page with "Authentication Code" - click "Copy Code" and paste it here.
+                          </p>
+                          <textarea
+                            value={manualCode}
+                            onChange={(e) => setManualCode(e.target.value)}
+                            placeholder="Paste the authentication code here..."
+                            className="w-full h-20 p-2 rounded-md border bg-muted font-mono text-xs resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+                          />
+                        </div>
+                        
+                        <Button onClick={submitManualCode} disabled={isSubmittingCode || !manualCode.trim()} className="w-full">
+                          {isSubmittingCode ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <CheckCircle className="h-4 w-4 mr-2" />}
+                          Complete Authentication
+                        </Button>
+                        
+                        <Button variant="outline" onClick={() => { setManualAuthUrl(null); setManualState(null); setManualCode(''); }} className="w-full">
+                          Start Over
+                        </Button>
+                      </div>
+                    )}
+                  </div>
                 )}
 
                 {addMode === 'import' && (

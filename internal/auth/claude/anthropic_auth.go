@@ -23,7 +23,8 @@ const (
 	anthropicTokenURL          = "https://console.anthropic.com/v1/oauth/token"
 	anthropicOrganizationsURL  = "https://api.claude.ai/api/organizations"
 	anthropicClientID          = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-	redirectURI                = "http://localhost:54545/callback"
+	RedirectURILocal           = "http://localhost:54545/callback"
+	RedirectURIManual          = "https://platform.claude.com/oauth/code/callback"
 )
 
 // tokenResponse represents the response structure from Anthropic's OAuth token endpoint.
@@ -75,6 +76,12 @@ func NewClaudeAuth(cfg *config.Config) *ClaudeAuth {
 //   - string: The state parameter for verification
 //   - error: An error if PKCE codes are missing or URL generation fails
 func (o *ClaudeAuth) GenerateAuthURL(state string, pkceCodes *PKCECodes) (string, string, error) {
+	return o.GenerateAuthURLWithRedirect(state, pkceCodes, RedirectURILocal)
+}
+
+// GenerateAuthURLWithRedirect creates OAuth URL with a custom redirect URI.
+// Use RedirectURIManual for headless flows (shows code on Anthropic's page).
+func (o *ClaudeAuth) GenerateAuthURLWithRedirect(state string, pkceCodes *PKCECodes, customRedirectURI string) (string, string, error) {
 	if pkceCodes == nil {
 		return "", "", fmt.Errorf("PKCE codes are required")
 	}
@@ -83,8 +90,8 @@ func (o *ClaudeAuth) GenerateAuthURL(state string, pkceCodes *PKCECodes) (string
 		"code":                  {"true"},
 		"client_id":             {anthropicClientID},
 		"response_type":         {"code"},
-		"redirect_uri":          {redirectURI},
-		"scope":                 {"org:create_api_key user:profile user:inference"},
+		"redirect_uri":          {customRedirectURI},
+		"scope":                 {"org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers"},
 		"code_challenge":        {pkceCodes.CodeChallenge},
 		"code_challenge_method": {"S256"},
 		"state":                 {state},
@@ -124,12 +131,15 @@ func (c *ClaudeAuth) parseCodeAndState(code string) (parsedCode, parsedState str
 //   - *ClaudeAuthBundle: The complete authentication bundle with tokens
 //   - error: An error if token exchange fails
 func (o *ClaudeAuth) ExchangeCodeForTokens(ctx context.Context, code, state string, pkceCodes *PKCECodes) (*ClaudeAuthBundle, error) {
+	return o.ExchangeCodeForTokensWithRedirect(ctx, code, state, pkceCodes, RedirectURILocal)
+}
+
+func (o *ClaudeAuth) ExchangeCodeForTokensWithRedirect(ctx context.Context, code, state string, pkceCodes *PKCECodes, redirectURI string) (*ClaudeAuthBundle, error) {
 	if pkceCodes == nil {
 		return nil, fmt.Errorf("PKCE codes are required for token exchange")
 	}
 	newCode, newState := o.parseCodeAndState(code)
 
-	// Prepare token exchange request
 	reqBody := map[string]any{
 		"code":          newCode,
 		"state":         state,

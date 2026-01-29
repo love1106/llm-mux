@@ -42,6 +42,7 @@ var emailReplacer = strings.NewReplacer("@", "_", ".", "_")
 type OAuthStartRequest struct {
 	Provider  string `json:"provider" binding:"required"`
 	ProjectID string `json:"project_id,omitempty"`
+	Manual    bool   `json:"manual,omitempty"` // If true, skip background polling (user will paste code manually)
 }
 
 // OAuthStartResponse represents the response for starting an OAuth flow.
@@ -95,7 +96,18 @@ func (h *Handler) OAuthStart(c *gin.Context) {
 	}
 
 	// Build auth URL for OAuth providers
-	authURL, state, codeVerifier, err := h.buildProviderAuthURL(providerName)
+	var authURL, state, codeVerifier string
+	var err error
+	if req.Manual && providerName == "claude" {
+		state, err = misc.GenerateRandomState()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, OAuthStartResponse{Status: "error", Error: "failed to generate state"})
+			return
+		}
+		authURL, state, codeVerifier, err = h.buildClaudeAuthURLManual(state)
+	} else {
+		authURL, state, codeVerifier, err = h.buildProviderAuthURL(providerName)
+	}
 	if err != nil {
 		c.JSON(http.StatusBadRequest, OAuthStartResponse{
 			Status: "error",
@@ -107,17 +119,24 @@ func (h *Handler) OAuthStart(c *gin.Context) {
 	// Register OAuth request with codeVerifier for PKCE providers
 	oauthReq := oauthService.Registry().Create(state, providerName, oauth.ModeWebUI)
 	oauthReq.CodeVerifier = codeVerifier
-
-	// Start callback forwarder for WebUI mode
-	if targetURL, errTarget := h.managementCallbackURL("/" + providerName + "/callback"); errTarget == nil {
-		if port := oauth.GetCallbackPort(providerName); port > 0 {
-			_, _ = startCallbackForwarder(port, providerName, targetURL)
-		}
+	if req.Manual && providerName == "claude" {
+		oauthReq.RedirectURI = claude.RedirectURIManual
+	} else {
+		oauthReq.RedirectURI = claude.RedirectURILocal
 	}
 
-	// Start background polling goroutine
-	ctx, cancel := context.WithTimeout(context.Background(), deviceFlowTimeout)
-	go h.pollOAuthCallback(ctx, cancel, providerName, state)
+	if !req.Manual {
+		// Start callback forwarder for WebUI mode
+		if targetURL, errTarget := h.managementCallbackURL("/" + providerName + "/callback"); errTarget == nil {
+			if port := oauth.GetCallbackPort(providerName); port > 0 {
+				_, _ = startCallbackForwarder(port, providerName, targetURL)
+			}
+		}
+
+		// Start background polling goroutine
+		ctx, cancel := context.WithTimeout(context.Background(), deviceFlowTimeout)
+		go h.pollOAuthCallback(ctx, cancel, providerName, state)
+	}
 
 	c.JSON(http.StatusOK, OAuthStartResponse{
 		Status:       "ok",
@@ -415,6 +434,53 @@ func (h *Handler) OAuthCancel(c *gin.Context) {
 	respondOK(c, gin.H{"status": "ok"})
 }
 
+type OAuthCompleteRequest struct {
+	State string `json:"state" binding:"required"`
+	Code  string `json:"code" binding:"required"`
+}
+
+type OAuthCompleteResponse struct {
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+}
+
+func (h *Handler) OAuthComplete(c *gin.Context) {
+	var req OAuthCompleteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, OAuthCompleteResponse{Status: "error", Error: "state and code are required"})
+		return
+	}
+
+	oauthReq := oauthService.Registry().Get(req.State)
+	if oauthReq == nil {
+		c.JSON(http.StatusNotFound, OAuthCompleteResponse{Status: "error", Error: "OAuth state not found or expired"})
+		return
+	}
+
+	providerName := oauthReq.Provider
+	ctx := c.Request.Context()
+
+	callback := &oauthCallbackData{Code: req.Code}
+	record, err := h.exchangeOAuthCode(ctx, providerName, req.State, callback)
+	if err != nil {
+		oauthService.Registry().Fail(req.State, err.Error())
+		c.JSON(http.StatusInternalServerError, OAuthCompleteResponse{Status: "error", Error: fmt.Sprintf("Token exchange failed: %v", err)})
+		return
+	}
+
+	savedPath, err := h.saveTokenRecord(ctx, record)
+	if err != nil {
+		oauthService.Registry().Fail(req.State, err.Error())
+		c.JSON(http.StatusInternalServerError, OAuthCompleteResponse{Status: "error", Error: fmt.Sprintf("Failed to save credentials: %v", err)})
+		return
+	}
+
+	oauthService.Registry().Complete(req.State, &oauth.OAuthResult{State: req.State, Code: "success"})
+	log.WithFields(log.Fields{"state": req.State, "path": savedPath, "provider": providerName}).Info("Manual OAuth completed")
+
+	c.JSON(http.StatusOK, OAuthCompleteResponse{Status: "ok"})
+}
+
 // GetOAuthService returns the shared OAuth service instance.
 func GetOAuthService() *oauth.Service {
 	return oauthService
@@ -446,13 +512,21 @@ func (h *Handler) buildProviderAuthURL(providerName string) (authURL, state, cod
 }
 
 func (h *Handler) buildClaudeAuthURL(state string) (string, string, string, error) {
+	return h.buildClaudeAuthURLWithRedirect(state, claude.RedirectURILocal)
+}
+
+func (h *Handler) buildClaudeAuthURLManual(state string) (string, string, string, error) {
+	return h.buildClaudeAuthURLWithRedirect(state, claude.RedirectURIManual)
+}
+
+func (h *Handler) buildClaudeAuthURLWithRedirect(state, redirectURI string) (string, string, string, error) {
 	pkceCodes, err := claude.GeneratePKCECodes()
 	if err != nil {
 		return "", "", "", fmt.Errorf("failed to generate PKCE codes: %w", err)
 	}
 
 	claudeAuth := claude.NewClaudeAuth(h.cfg)
-	authURL, _, err := claudeAuth.GenerateAuthURL(state, pkceCodes)
+	authURL, _, err := claudeAuth.GenerateAuthURLWithRedirect(state, pkceCodes, redirectURI)
 	if err != nil {
 		return "", "", "", fmt.Errorf("failed to generate auth URL: %w", err)
 	}
@@ -576,7 +650,12 @@ func (h *Handler) exchangeClaudeCode(ctx context.Context, state, code string) (*
 	claudeAuth := claude.NewClaudeAuth(h.cfg)
 	pkceCodes := &claude.PKCECodes{CodeVerifier: oauthReq.CodeVerifier}
 
-	bundle, err := claudeAuth.ExchangeCodeForTokens(ctx, code, state, pkceCodes)
+	redirectURI := oauthReq.RedirectURI
+	if redirectURI == "" {
+		redirectURI = claude.RedirectURILocal
+	}
+
+	bundle, err := claudeAuth.ExchangeCodeForTokensWithRedirect(ctx, code, state, pkceCodes, redirectURI)
 	if err != nil {
 		return nil, err
 	}

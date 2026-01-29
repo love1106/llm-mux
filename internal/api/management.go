@@ -86,5 +86,6 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.POST("/oauth/start", s.mgmt.OAuthStart)
 		mgmt.GET("/oauth/status/:state", s.mgmt.OAuthStatus)
 		mgmt.POST("/oauth/cancel/:state", s.mgmt.OAuthCancel)
+		mgmt.POST("/oauth/complete", s.mgmt.OAuthComplete)
 	}
 }
