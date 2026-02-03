@@ -32,6 +32,14 @@ const LOG_LEVEL_CONFIG: Record<LogLevel, { icon: React.ReactNode; color: string;
   error: { icon: <XCircle className="h-3 w-3" />, color: 'text-red-500', bg: 'bg-red-50 dark:bg-red-900/20' },
 }
 
+function utcToLocal(utcTimestamp: string): string {
+  if (!utcTimestamp) return ''
+  const date = new Date(utcTimestamp.replace(' ', 'T') + 'Z')
+  if (isNaN(date.getTime())) return utcTimestamp
+  const pad = (n: number) => n.toString().padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
 function parseLogLine(line: string): ParsedLog {
   const timestampMatch = line.match(/^\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\]/)
   const levelMatch = line.match(/\[(debug|info|warn|warning|error)\]/i)
@@ -44,7 +52,7 @@ function parseLogLine(line: string): ParsedLog {
   }
 
   return {
-    timestamp: timestampMatch ? timestampMatch[1] : '',
+    timestamp: timestampMatch ? utcToLocal(timestampMatch[1]) : '',
     level,
     message: line,
     raw: line,
@@ -56,7 +64,7 @@ export function LogsPage() {
   const [autoScroll, setAutoScroll] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [logLevel, setLogLevel] = useState<LogLevel>('all')
-  const [limit, setLimit] = useState(500)
+  const [limit, setLimit] = useState(100)
   const containerRef = useRef<HTMLDivElement>(null)
 
   const { data, isLoading, refetch } = useQuery({
@@ -70,11 +78,13 @@ export function LogsPage() {
   const parsedLogs = useMemo(() => lines.map(parseLogLine), [lines])
 
   const filteredLogs = useMemo(() => {
-    return parsedLogs.filter((log) => {
-      if (logLevel !== 'all' && log.level !== logLevel) return false
-      if (searchTerm && !log.message.toLowerCase().includes(searchTerm.toLowerCase())) return false
-      return true
-    })
+    return parsedLogs
+      .filter((log) => {
+        if (logLevel !== 'all' && log.level !== logLevel) return false
+        if (searchTerm && !log.message.toLowerCase().includes(searchTerm.toLowerCase())) return false
+        return true
+      })
+      .reverse()
   }, [parsedLogs, logLevel, searchTerm])
 
   const levelCounts = useMemo(() => {
@@ -219,11 +229,11 @@ export function LogsPage() {
         </CardContent>
       </Card>
 
-      <Card className="flex-1 overflow-hidden">
-        <CardHeader className="pb-2">
+      <Card className="flex-1 overflow-hidden flex flex-col min-h-0">
+        <CardHeader className="pb-2 flex-shrink-0">
           <CardTitle className="text-sm font-medium">{filteredLogs.length} log entries</CardTitle>
         </CardHeader>
-        <CardContent className="p-0">
+        <CardContent className="p-0 flex-1 overflow-hidden min-h-0">
           {isLoading ? (
             <div className="text-center py-8 text-muted-foreground">Loading logs...</div>
           ) : filteredLogs.length === 0 ? (
@@ -233,7 +243,7 @@ export function LogsPage() {
           ) : (
             <div
               ref={containerRef}
-              className="max-h-[500px] overflow-auto font-mono text-xs divide-y divide-border"
+              className="h-full overflow-auto font-mono text-xs divide-y divide-border"
             >
               {filteredLogs.map((log, i) => {
                 const config = LOG_LEVEL_CONFIG[log.level] || LOG_LEVEL_CONFIG.info

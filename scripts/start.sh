@@ -1,6 +1,6 @@
 #!/bin/bash
-ROOT="$(dirname "$0")/.."
-cd "$ROOT"
+cd "$(dirname "$0")/.."
+ROOT="$(pwd)"
 
 if lsof -i :8317 &>/dev/null; then
   echo "API server already running on :8317"
@@ -16,9 +16,14 @@ else
   echo "UI server started on :8318"
 fi
 
-nohup "$ROOT/scripts/keepalive.sh" > /tmp/llm-mux-keepalive.log 2>&1 &
-echo "Keepalive watchdog started in background"
+pkill -f "keepalive.sh" 2>/dev/null
+nohup bash "$ROOT/scripts/keepalive.sh" > /tmp/llm-mux-keepalive.log 2>&1 &
+sleep 0.5
+if pgrep -f "keepalive.sh" > /dev/null; then
+  echo "Keepalive watchdog started"
+else
+  echo "Warning: Keepalive failed to start"
+fi
 
-sleep 1
 echo ""
 echo "Logs: /tmp/llm-mux-api.log, /tmp/llm-mux-ui.log, /tmp/llm-mux-keepalive.log"

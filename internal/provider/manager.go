@@ -803,6 +803,7 @@ func (m *Manager) pickNextFromRegistry(ctx context.Context, provider, model stri
 		return nil, nil, &Error{Code: "auth_not_found", Message: "selector returned no auth"}
 	}
 
+	log.Infof("pickNextFromRegistry: SELECTED auth=%s for provider=%s model=%s", selected.ID(), provider, model)
 	return selected.ToAuth(), executor, nil
 }
 

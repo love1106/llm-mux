@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	log "github.com/nghyane/llm-mux/internal/logging"
 )
 
 type AuthQuotaState struct {
@@ -425,6 +427,8 @@ func (m *QuotaManager) RecordQuotaHit(authID, provider, model string, cooldown *
 	state := m.getOrCreateState(authID)
 	strategy := m.getStrategy(provider)
 	strategy.OnQuotaHit(state, cooldown)
+	cooldownUntil := state.GetCooldownUntil()
+	log.Warnf("quota_manager: 429 RATE LIMIT - auth=%s provider=%s model=%s cooldown_until=%s", authID, provider, model, cooldownUntil.Format(time.RFC3339))
 	state.TriggerRefresh()
 }
 

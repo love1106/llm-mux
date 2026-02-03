@@ -74,7 +74,7 @@ func (h *BaseAPIHandler) GetAlt(c *gin.Context) string {
 
 func (h *BaseAPIHandler) GetContextWithCancel(ctx context.Context, handler interfaces.APIHandler, c *gin.Context) (context.Context, APIHandlerCancelFunc) {
 	newCtx, cancel := context.WithCancel(ctx)
-	newCtx = context.WithValue(newCtx, ctxKeyGin, c)
+	newCtx = context.WithValue(newCtx, ginContextKey, c)
 	newCtx = context.WithValue(newCtx, ctxKeyHandler, handler)
 	return newCtx, func(params ...any) {
 		if h.Cfg.RequestLog && len(params) == 1 {
@@ -91,13 +91,10 @@ func (h *BaseAPIHandler) GetContextWithCancel(ctx context.Context, handler inter
 	}
 }
 
-// Context keys to avoid string allocation on each request
 type ctxKey int
 
-const (
-	ctxKeyGin ctxKey = iota
-	ctxKeyHandler
-)
+const ctxKeyHandler ctxKey = 0
+const ginContextKey = "gin_context"
 
 func appendAPIResponse(c *gin.Context, data []byte) {
 	if c == nil || len(data) == 0 {
@@ -369,8 +366,8 @@ func (h *BaseAPIHandler) LoggingAPIResponseError(ctx context.Context, err *inter
 	if !h.Cfg.RequestLog {
 		return
 	}
-	ginContext, ok := ctx.Value(ctxKeyGin).(*gin.Context)
-	if !ok {
+	ginContext, ok := ctx.Value(ginContextKey).(*gin.Context)
+	if !ok || ginContext == nil {
 		return
 	}
 	if apiResponseErrors, isExist := ginContext.Get("API_RESPONSE_ERROR"); isExist {

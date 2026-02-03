@@ -41,6 +41,13 @@ func GinLogrusLogger() gin.HandlerFunc {
 		errorMessage := c.Errors.ByType(gin.ErrorTypePrivate).String()
 		timestamp := time.Now().Format("2006/01/02 - 15:04:05")
 		logLine := fmt.Sprintf("[GIN] %s | %3d | %13v | %15s | %-7s \"%s\"", timestamp, statusCode, latency, clientIP, method, path)
+
+		if selectedAuth, exists := c.Get("selected_auth"); exists {
+			if authID, ok := selectedAuth.(string); ok && authID != "" {
+				logLine = logLine + " | auth=" + authID
+			}
+		}
+
 		if errorMessage != "" {
 			logLine = logLine + " | " + errorMessage
 		}

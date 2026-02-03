@@ -365,3 +365,239 @@ func TestAntigravityStrategyTokenPenalty(t *testing.T) {
 		t.Errorf("expected needs-refresh penalty of at least %d, got %d", expectedRefreshPenalty, needsRefreshScore)
 	}
 }
+
+// ========== Round-Robin Validation Tests ==========
+
+// TestQuotaManager_Pick_RoundRobinDistribution verifies that requests are distributed
+// across multiple accounts when ForceRotate is used (bypasses sticky sessions).
+func TestQuotaManager_Pick_RoundRobinDistribution(t *testing.T) {
+	m := NewQuotaManager()
+
+	// Create 3 Claude accounts with identical state (no usage)
+	auth1 := &Auth{ID: "rr-auth1", Provider: "claude"}
+	auth2 := &Auth{ID: "rr-auth2", Provider: "claude"}
+	auth3 := &Auth{ID: "rr-auth3", Provider: "claude"}
+	auths := []*Auth{auth1, auth2, auth3}
+
+	// Track how many times each account is selected
+	selections := make(map[string]int)
+
+	// Pick 9 times with ForceRotate to ensure round-robin distribution
+	for i := 0; i < 9; i++ {
+		selected, err := m.Pick(context.Background(), "claude", "claude-sonnet-4", Options{ForceRotate: true}, auths)
+		if err != nil {
+			t.Fatalf("Pick %d failed: %v", i, err)
+		}
+		selections[selected.ID]++
+	}
+
+	// With 9 picks and 3 accounts, each should be selected at least once
+	// Due to random tie-breaking among top-3 similar scores, exact distribution varies
+	for _, auth := range auths {
+		if selections[auth.ID] == 0 {
+			t.Errorf("Account %s was never selected in round-robin distribution", auth.ID)
+		}
+	}
+
+	t.Logf("Round-robin distribution: auth1=%d, auth2=%d, auth3=%d",
+		selections["rr-auth1"], selections["rr-auth2"], selections["rr-auth3"])
+}
+
+// TestQuotaManager_Pick_TwoAccountRoundRobin verifies round-robin between exactly 2 accounts.
+func TestQuotaManager_Pick_TwoAccountRoundRobin(t *testing.T) {
+	m := NewQuotaManager()
+
+	auth1 := &Auth{ID: "two-auth1", Provider: "claude"}
+	auth2 := &Auth{ID: "two-auth2", Provider: "claude"}
+	auths := []*Auth{auth1, auth2}
+
+	// Track selections
+	selections := make(map[string]int)
+
+	// Pick 6 times with ForceRotate
+	for i := 0; i < 6; i++ {
+		selected, err := m.Pick(context.Background(), "claude", "claude-sonnet-4", Options{ForceRotate: true}, auths)
+		if err != nil {
+			t.Fatalf("Pick %d failed: %v", i, err)
+		}
+		selections[selected.ID]++
+	}
+
+	// Both accounts should be selected
+	if selections["two-auth1"] == 0 {
+		t.Error("Account two-auth1 was never selected")
+	}
+	if selections["two-auth2"] == 0 {
+		t.Error("Account two-auth2 was never selected")
+	}
+
+	t.Logf("Two-account distribution: auth1=%d, auth2=%d",
+		selections["two-auth1"], selections["two-auth2"])
+}
+
+// ========== 429 Fallback Validation Tests ==========
+
+// TestQuotaManager_Claude429FallbackToOtherAccount verifies that when a Claude account
+// receives a 429 rate limit, the next request is routed to a different account.
+func TestQuotaManager_Claude429FallbackToOtherAccount(t *testing.T) {
+	m := NewQuotaManager()
+
+	auth1 := &Auth{ID: "claude-auth1", Provider: "claude"}
+	auth2 := &Auth{ID: "claude-auth2", Provider: "claude"}
+	auths := []*Auth{auth1, auth2}
+
+	// First pick should work (either account)
+	firstPick, err := m.Pick(context.Background(), "claude", "claude-sonnet-4", Options{ForceRotate: true}, auths)
+	if err != nil {
+		t.Fatalf("First Pick failed: %v", err)
+	}
+
+	// Simulate 429 rate limit on the first picked account (3 hour cooldown)
+	cooldown := 3 * time.Hour
+	m.RecordQuotaHit(firstPick.ID, "claude", "claude-sonnet-4", &cooldown)
+
+	// Verify the account is now in cooldown
+	state := m.GetState(firstPick.ID)
+	if state == nil || state.CooldownUntil.IsZero() {
+		t.Fatal("Expected account to be in cooldown after 429")
+	}
+
+	// Next pick should route to the OTHER account (not the one in cooldown)
+	secondPick, err := m.Pick(context.Background(), "claude", "claude-sonnet-4", Options{ForceRotate: true}, auths)
+	if err != nil {
+		t.Fatalf("Second Pick failed: %v", err)
+	}
+
+	// The second pick should NOT be the account that's in cooldown
+	if secondPick.ID == firstPick.ID {
+		t.Errorf("Expected request to be routed to different account after 429. First: %s, Second: %s",
+			firstPick.ID, secondPick.ID)
+	}
+
+	t.Logf("429 fallback working: First pick=%s (now in cooldown), Second pick=%s", firstPick.ID, secondPick.ID)
+}
+
+// TestQuotaManager_AllClaude429ReturnsError verifies that when ALL Claude accounts
+// are rate limited, an appropriate error is returned.
+func TestQuotaManager_AllClaude429ReturnsError(t *testing.T) {
+	m := NewQuotaManager()
+
+	auth1 := &Auth{ID: "all429-auth1", Provider: "claude"}
+	auth2 := &Auth{ID: "all429-auth2", Provider: "claude"}
+	auths := []*Auth{auth1, auth2}
+
+	// Put both accounts in cooldown (simulating 429 on both)
+	cooldown := 3 * time.Hour
+	m.RecordQuotaHit("all429-auth1", "claude", "claude-sonnet-4", &cooldown)
+	m.RecordQuotaHit("all429-auth2", "claude", "claude-sonnet-4", &cooldown)
+
+	// Attempt to pick - should fail with 429-like error
+	_, err := m.Pick(context.Background(), "claude", "claude-sonnet-4", Options{}, auths)
+	if err == nil {
+		t.Fatal("Expected error when all accounts are in cooldown")
+	}
+
+	// Verify it's a 429 error with retry info
+	provErr, ok := err.(*Error)
+	if !ok {
+		t.Fatalf("Expected *Error, got %T: %v", err, err)
+	}
+	if provErr.HTTPStatus != 429 {
+		t.Errorf("Expected 429 status, got %d", provErr.HTTPStatus)
+	}
+
+	t.Logf("All accounts in cooldown correctly returns 429: %v", err)
+}
+
+// ========== Claude Strategy 5-Hour Cooldown Tests ==========
+
+// TestClaudeStrategy_OnQuotaHit_DefaultCooldown5Hours verifies that when no explicit
+// cooldown is provided, Claude accounts default to 5 hours.
+func TestClaudeStrategy_OnQuotaHit_DefaultCooldown5Hours(t *testing.T) {
+	strategy := &ClaudeStrategy{}
+	state := &AuthQuotaState{}
+
+	now := time.Now()
+	strategy.OnQuotaHit(state, nil)
+
+	cooldownUntil := state.GetCooldownUntil()
+	if cooldownUntil.IsZero() {
+		t.Fatal("Expected CooldownUntil to be set")
+	}
+
+	actualCooldown := cooldownUntil.Sub(now)
+
+	expected := 5 * time.Hour
+	tolerance := 1 * time.Second
+
+	if actualCooldown < expected-tolerance || actualCooldown > expected+tolerance {
+		t.Errorf("Expected cooldown of ~%v, got %v", expected, actualCooldown)
+	}
+
+	t.Logf("Claude default cooldown verified: %v (expected ~%v)", actualCooldown.Round(time.Minute), expected)
+}
+
+// TestClaudeStrategy_OnQuotaHit_ExplicitCooldownOverridesDefault verifies that
+// when an explicit cooldown is provided (from server's Retry-After), it's used.
+func TestClaudeStrategy_OnQuotaHit_ExplicitCooldownOverridesDefault(t *testing.T) {
+	strategy := &ClaudeStrategy{}
+	state := &AuthQuotaState{}
+
+	// Call OnQuotaHit with explicit 30-minute cooldown
+	now := time.Now()
+	explicitCooldown := 30 * time.Minute
+	strategy.OnQuotaHit(state, &explicitCooldown)
+
+	cooldownUntil := state.GetCooldownUntil()
+	if cooldownUntil.IsZero() {
+		t.Fatal("Expected CooldownUntil to be set")
+	}
+
+	// Calculate the actual cooldown duration
+	actualCooldown := cooldownUntil.Sub(now)
+
+	// Should be approximately 30 minutes
+	tolerance := 1 * time.Second
+
+	if actualCooldown < explicitCooldown-tolerance || actualCooldown > explicitCooldown+tolerance {
+		t.Errorf("Expected cooldown of ~%v, got %v", explicitCooldown, actualCooldown)
+	}
+
+	t.Logf("Claude explicit cooldown verified: %v (expected ~%v)", actualCooldown.Round(time.Second), explicitCooldown)
+}
+
+// TestClaudeStrategy_OnQuotaHit_LearnedCooldownUsed verifies that when a previous
+// cooldown was learned, it's used as the default instead of the 3-hour fallback.
+func TestClaudeStrategy_OnQuotaHit_LearnedCooldownUsed(t *testing.T) {
+	strategy := &ClaudeStrategy{}
+	state := &AuthQuotaState{}
+
+	// First, set a learned cooldown (simulating a previous 429 with explicit duration)
+	firstCooldown := 2 * time.Hour
+	strategy.OnQuotaHit(state, &firstCooldown)
+
+	// Verify learned cooldown was stored
+	learnedCooldown := state.GetLearnedCooldown()
+	if learnedCooldown != firstCooldown {
+		t.Errorf("Expected learned cooldown %v, got %v", firstCooldown, learnedCooldown)
+	}
+
+	// Clear the cooldown state to test the learned value
+	state.SetCooldownUntil(time.Time{})
+
+	// Now call OnQuotaHit with nil (should use learned value, not default)
+	now := time.Now()
+	strategy.OnQuotaHit(state, nil)
+
+	cooldownUntil := state.GetCooldownUntil()
+	actualCooldown := cooldownUntil.Sub(now)
+
+	// Should use the learned 2-hour value, not the default 3 hours
+	tolerance := 1 * time.Second
+
+	if actualCooldown < firstCooldown-tolerance || actualCooldown > firstCooldown+tolerance {
+		t.Errorf("Expected learned cooldown of ~%v, got %v (should not use default 3h)", firstCooldown, actualCooldown)
+	}
+
+	t.Logf("Claude learned cooldown verified: %v (expected ~%v)", actualCooldown.Round(time.Second), firstCooldown)
+}

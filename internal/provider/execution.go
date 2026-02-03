@@ -5,11 +5,14 @@ import (
 	"errors"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	log "github.com/nghyane/llm-mux/internal/logging"
 	"github.com/nghyane/llm-mux/internal/registry"
 	"github.com/nghyane/llm-mux/internal/telemetry"
 	"github.com/sony/gobreaker"
 )
+
+const ginContextKey = "gin_context"
 
 // ExecuteWithProvider handles non-streaming execution for a single provider, attempting
 // multiple auth candidates until one succeeds or all are exhausted.
@@ -44,6 +47,8 @@ func (m *Manager) executeWithProvider(ctx context.Context, provider string, req 
 			}
 			return Response{}, errPick
 		}
+
+		setSelectedAuth(ctx, auth.ID)
 
 		tried[auth.ID] = struct{}{}
 		execCtx := ctx
@@ -113,6 +118,8 @@ func (m *Manager) executeCountWithProvider(ctx context.Context, provider string,
 			}
 			return Response{}, errPick
 		}
+
+		setSelectedAuth(ctx, auth.ID)
 
 		tried[auth.ID] = struct{}{}
 		execCtx := ctx
@@ -184,6 +191,8 @@ func (m *Manager) executeStreamWithProvider(ctx context.Context, provider string
 			}
 			return nil, errPick
 		}
+
+		setSelectedAuth(ctx, auth.ID)
 
 		tried[auth.ID] = struct{}{}
 		execCtx := ctx
@@ -314,4 +323,10 @@ func (m *Manager) executeStreamProvidersOnce(ctx context.Context, providers []st
 		return nil, lastErr
 	}
 	return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
+}
+
+func setSelectedAuth(ctx context.Context, authID string) {
+	if c, ok := ctx.Value(ginContextKey).(*gin.Context); ok && c != nil {
+		c.Set("selected_auth", authID)
+	}
 }
