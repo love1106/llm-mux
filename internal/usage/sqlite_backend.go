@@ -70,7 +70,14 @@ func initSchema(db *sql.DB) error {
 		return err
 	}
 
-	return migrateSchema(db)
+	if err := migrateSchema(db); err != nil {
+		return err
+	}
+
+	// Index on client_ip is created after migration to avoid failure on existing DBs
+	_, _ = db.Exec("CREATE INDEX IF NOT EXISTS idx_usage_client_ip ON usage_records(client_ip)")
+
+	return nil
 }
 
 func migrateSchema(db *sql.DB) error {
@@ -79,6 +86,7 @@ func migrateSchema(db *sql.DB) error {
 		"cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0",
 		"cache_read_input_tokens INTEGER NOT NULL DEFAULT 0",
 		"tool_use_prompt_tokens INTEGER NOT NULL DEFAULT 0",
+		"client_ip TEXT NOT NULL DEFAULT ''",
 	}
 
 	for _, colDef := range migrations {
@@ -435,6 +443,52 @@ func (b *SQLiteBackend) QueryModelStats(ctx context.Context, since time.Time) ([
 	return results, rows.Err()
 }
 
+func (b *SQLiteBackend) QueryIPStats(ctx context.Context, since time.Time) ([]IPStats, error) {
+	rows, err := b.db.QueryContext(ctx, `
+		SELECT 
+			COALESCE(NULLIF(client_ip, ''), 'unknown') as client_ip,
+			COUNT(*) as requests,
+			SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END) as success_count,
+			SUM(CASE WHEN failed = 1 THEN 1 ELSE 0 END) as failure_count,
+			COALESCE(SUM(input_tokens), 0) as input_tokens,
+			COALESCE(SUM(output_tokens), 0) as output_tokens,
+			COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
+			COALESCE(SUM(total_tokens), 0) as total_tokens,
+			GROUP_CONCAT(DISTINCT NULLIF(model, '')) as models,
+			MAX(requested_at) as last_seen_at
+		FROM usage_records
+		WHERE requested_at >= ?
+		GROUP BY client_ip
+		ORDER BY SUM(total_tokens) DESC
+	`, since)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query IP stats: %w", err)
+	}
+	defer rows.Close()
+
+	var results []IPStats
+	for rows.Next() {
+		var is IPStats
+		var modelsStr sql.NullString
+		var lastSeenStr sql.NullString
+		if err := rows.Scan(
+			&is.ClientIP, &is.Requests, &is.SuccessCount, &is.FailureCount,
+			&is.InputTokens, &is.OutputTokens, &is.ReasoningTokens, &is.TotalTokens,
+			&modelsStr, &lastSeenStr,
+		); err != nil {
+			return nil, err
+		}
+		if modelsStr.Valid && modelsStr.String != "" {
+			is.Models = strings.Split(modelsStr.String, ",")
+		}
+		if lastSeenStr.Valid && lastSeenStr.String != "" {
+			is.LastSeenAt = parseSQLiteTimestamp(lastSeenStr.String)
+		}
+		results = append(results, is)
+	}
+	return results, rows.Err()
+}
+
 // Cleanup removes records older than the given time.
 func (b *SQLiteBackend) Cleanup(ctx context.Context, before time.Time) (int64, error) {
 	result, err := b.db.ExecContext(ctx, `
@@ -499,6 +553,25 @@ func (b *SQLiteBackend) writeLoop() {
 	}
 }
 
+// parseSQLiteTimestamp handles Go's time.Time.String() format stored by SQLite:
+// "2006-01-02 15:04:05.999999999 +0000 UTC m=+12345.678"
+func parseSQLiteTimestamp(s string) time.Time {
+	if idx := strings.Index(s, " m="); idx > 0 {
+		s = s[:idx]
+	}
+	for _, layout := range []string{
+		"2006-01-02 15:04:05.999999999 +0000 UTC",
+		"2006-01-02 15:04:05.999999999 -0700 MST",
+		"2006-01-02T15:04:05Z07:00",
+		"2006-01-02 15:04:05",
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
 // writeBatch writes a batch of records to the database in a single transaction.
 func (b *SQLiteBackend) writeBatch(ctx context.Context, records []UsageRecord) error {
 	if len(records) == 0 {
@@ -512,11 +585,11 @@ func (b *SQLiteBackend) writeBatch(ctx context.Context, records []UsageRecord) e
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO usage_records (
-			provider, model, api_key, auth_id, auth_index, source,
+			provider, model, api_key, auth_id, auth_index, source, client_ip,
 			requested_at, failed, input_tokens, output_tokens,
 			reasoning_tokens, cached_tokens, total_tokens,
 			audio_tokens, cache_creation_input_tokens, cache_read_input_tokens, tool_use_prompt_tokens
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		_ = tx.Rollback()
@@ -532,6 +605,7 @@ func (b *SQLiteBackend) writeBatch(ctx context.Context, records []UsageRecord) e
 			record.AuthID,
 			record.AuthIndex,
 			record.Source,
+			record.ClientIP,
 			record.RequestedAt,
 			record.Failed,
 			record.InputTokens,

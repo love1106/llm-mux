@@ -161,6 +161,7 @@ func NewServer(cfg *config.Config, authManager *provider.Manager, accessManager 
 		optionState.engineConfigurator(engine)
 	}
 
+	engine.Use(clientIPMiddleware())
 	engine.Use(log.GinLogrusLogger())
 	engine.Use(log.GinLogrusRecovery())
 	for _, mw := range optionState.extraMiddleware {

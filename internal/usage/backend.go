@@ -37,6 +37,9 @@ type Backend interface {
 	// QueryModelStats returns per-model statistics since the given time.
 	QueryModelStats(ctx context.Context, since time.Time) ([]ModelStats, error)
 
+	// QueryIPStats returns per-client-IP statistics since the given time.
+	QueryIPStats(ctx context.Context, since time.Time) ([]IPStats, error)
+
 	// Cleanup removes records older than the given time.
 	Cleanup(ctx context.Context, before time.Time) (int64, error)
 

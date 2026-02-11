@@ -441,6 +441,7 @@ func (h *BaseAPIHandler) publishUsageFromResponse(ctx context.Context, providers
 	usage.PublishRecord(ctx, usage.Record{
 		Provider:    provider,
 		Model:       model,
+		ClientIP:    interfaces.ClientIPFromContext(ctx),
 		RequestedAt: requestedAt,
 		Failed:      false,
 		Usage: &ir.Usage{

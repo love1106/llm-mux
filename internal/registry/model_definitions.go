@@ -9,6 +9,11 @@ func GetClaudeModels() []*ModelInfo {
 		Claude("claude-haiku-4-5-20251001").Display("Claude 4.5 Haiku").Created(1759276800).Canonical("claude-haiku-4-5").Context(200000, 64000).B(),
 		Claude("claude-sonnet-4-5-20250929").Display("Claude 4.5 Sonnet").Created(1759104000).Canonical("claude-sonnet-4-5").Context(200000, 64000).B(),
 		Claude("claude-sonnet-4-5-thinking").Display("Claude 4.5 Sonnet Thinking").Created(1759104000).Context(200000, 64000).Thinking(1024, 100000).B(),
+		Claude("claude-opus-4-6-thinking").Display("Claude 4.6 Opus Thinking").Created(1739232000).Context(200000, 64000).Thinking(1024, 100000).B(),
+		Claude("claude-opus-4-6-thinking-low").Display("Claude 4.6 Opus Thinking Low").Created(1739232000).Context(200000, 64000).Thinking(1024, 100000).B(),
+		Claude("claude-opus-4-6-thinking-medium").Display("Claude 4.6 Opus Thinking Medium").Created(1739232000).Context(200000, 64000).Thinking(1024, 100000).B(),
+		Claude("claude-opus-4-6-thinking-high").Display("Claude 4.6 Opus Thinking High").Created(1739232000).Context(200000, 64000).Thinking(1024, 100000).B(),
+		Claude("claude-opus-4-6-20260211").Display("Claude 4.6 Opus").Desc("Most intelligent Claude model with breakthrough reasoning capabilities").Created(1739232000).Canonical("claude-opus-4-6").Context(200000, 64000).B(),
 		Claude("claude-opus-4-5-thinking").Display("Claude 4.5 Opus Thinking").Created(1761955200).Context(200000, 64000).Thinking(1024, 100000).B(),
 		Claude("claude-opus-4-5-thinking-low").Display("Claude 4.5 Opus Thinking Low").Created(1761955200).Context(200000, 64000).Thinking(1024, 100000).B(),
 		Claude("claude-opus-4-5-thinking-medium").Display("Claude 4.5 Opus Thinking Medium").Created(1761955200).Context(200000, 64000).Thinking(1024, 100000).B(),
@@ -113,6 +118,7 @@ func GetGitHubCopilotModels() []*ModelInfo {
 		Copilot("claude-sonnet-4").Display("Claude Sonnet 4").Desc("Anthropic Claude Sonnet 4 via GitHub Copilot").Created(1763424000).B(),
 		Copilot("claude-sonnet-4.5").Display("Claude Sonnet 4.5").Desc("Anthropic Claude Sonnet 4.5 via GitHub Copilot").Created(1763424000).B(),
 		Copilot("claude-haiku-4.5").Display("Claude Haiku 4.5").Desc("Anthropic Claude Haiku 4.5 via GitHub Copilot").Created(1763424000).B(),
+		Copilot("claude-opus-4.6").Display("Claude Opus 4.6").Desc("Anthropic Claude Opus 4.6 via GitHub Copilot").Created(1739232000).B(),
 		Copilot("claude-opus-4.5").Display("Claude Opus 4.5").Desc("Anthropic Claude Opus 4.5 via GitHub Copilot").Created(1763424000).B(),
 		// Google models via GitHub Copilot
 		Copilot("gemini-2.5-pro").Display("Gemini 2.5 Pro").Desc("Google Gemini 2.5 Pro via GitHub Copilot").Created(1763424000).B(),
@@ -138,6 +144,7 @@ func GetKiroModels() []*ModelInfo {
 		Kiro("claude-4-sonnet").Display("Claude 4 Sonnet").Desc("Claude 4 Sonnet via Kiro/Amazon Q").Created(1747267200).Canonical("claude-sonnet-4").B(),
 		Kiro("claude-opus-4-20250514").Display("Claude 4 Opus").Desc("Claude 4 Opus via Kiro/Amazon Q").Created(1747267200).Canonical("claude-opus-4").B(),
 		Kiro("claude-opus-4-5-20251101").Display("Claude 4.5 Opus").Desc("Claude 4.5 Opus via Kiro/Amazon Q").Created(1761955200).Canonical("claude-opus-4-5").B(),
+		Kiro("claude-opus-4-6-20260211").Display("Claude 4.6 Opus").Desc("Claude 4.6 Opus via Kiro/Amazon Q").Created(1739232000).Canonical("claude-opus-4-6").B(),
 		Kiro("claude-3-5-sonnet-20241022").Display("Claude 3.5 Sonnet").Desc("Claude 3.5 Sonnet via Kiro/Amazon Q").Created(1729555200).B(),
 		Kiro("claude-3-5-haiku-20241022").Display("Claude 3.5 Haiku").Desc("Claude 3.5 Haiku via Kiro/Amazon Q").Created(1729555200).B(),
 	}

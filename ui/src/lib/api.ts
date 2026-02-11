@@ -74,6 +74,7 @@ export interface UsageStats {
   by_provider: Record<string, { requests: number; tokens: { total: number; input: number; output: number }; cost_usd: number }>
   by_account: Record<string, { provider: string; auth_id: string; requests: number; tokens: { total: number; input: number; output: number } }>
   by_model: Record<string, { provider: string; requests: number; tokens: { total: number; input: number; output: number }; cost_usd: number }>
+  by_ip?: Record<string, { requests: number; success: number; failure: number; tokens: { total: number; input: number; output: number; reasoning: number }; models: string[]; last_seen_at: string }>
   timeline?: {
     by_day: Array<{ day: string; requests: number; tokens: number }>
   }

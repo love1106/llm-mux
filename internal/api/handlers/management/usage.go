@@ -126,6 +126,28 @@ func (h *Handler) GetUsageStatistics(c *gin.Context) {
 		response.Summary.CostUSD = totalCost
 	}
 
+	if ipStats, err := backend.QueryIPStats(ctx, from); err != nil {
+		log.Warnf("usage: failed to query IP stats: %v", err)
+	} else if len(ipStats) > 0 {
+		byIP := make(map[string]UsageIPStats, len(ipStats))
+		for _, is := range ipStats {
+			byIP[is.ClientIP] = UsageIPStats{
+				Requests: is.Requests,
+				Success:  is.SuccessCount,
+				Failure:  is.FailureCount,
+				Tokens: TokenSummary{
+					Total:     is.TotalTokens,
+					Input:     is.InputTokens,
+					Output:    is.OutputTokens,
+					Reasoning: is.ReasoningTokens,
+				},
+				Models:     is.Models,
+				LastSeenAt: is.LastSeenAt.Format(time.RFC3339),
+			}
+		}
+		response.ByIP = byIP
+	}
+
 	timeline := &UsageTimeline{}
 	hasTimeline := false
 

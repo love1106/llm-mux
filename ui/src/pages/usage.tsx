@@ -1,5 +1,5 @@
-import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -29,8 +29,37 @@ type TimeRange = '1h' | '24h' | '7d' | '30d'
 
 const COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#8dd1e1', '#d084d8', '#84d8c9']
 
+const VALID_TABS = ['timeline', 'providers', 'accounts', 'ips'] as const
+const VALID_RANGES: TimeRange[] = ['1h', '24h', '7d', '30d']
+
 export function UsagePage() {
-  const [timeRange, setTimeRange] = useState<TimeRange>('7d')
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  const tab = VALID_TABS.includes(searchParams.get('tab') as (typeof VALID_TABS)[number])
+    ? (searchParams.get('tab') as string)
+    : 'timeline'
+
+  const timeRange: TimeRange = VALID_RANGES.includes(searchParams.get('range') as TimeRange)
+    ? (searchParams.get('range') as TimeRange)
+    : '7d'
+
+  const setTab = (value: string) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      if (value === 'timeline') next.delete('tab')
+      else next.set('tab', value)
+      return next
+    })
+  }
+
+  const setTimeRange = (value: TimeRange) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      if (value === '7d') next.delete('range')
+      else next.set('range', value)
+      return next
+    })
+  }
 
   const getDays = () => {
     switch (timeRange) {
@@ -56,6 +85,7 @@ export function UsagePage() {
   const stats = data?.data?.data
   const byProvider = stats?.by_provider || {}
   const byAccount = stats?.by_account || {}
+  const byIP = stats?.by_ip || {}
   const timeline = stats?.timeline?.by_day || []
 
   const providerData = Object.entries(byProvider).map(([name, data]) => ({
@@ -71,8 +101,21 @@ export function UsagePage() {
     tokens: data.tokens?.total || 0,
   }))
 
+  const ipData = Object.entries(byIP)
+    .map(([ip, data]) => ({
+      ip,
+      requests: data.requests || 0,
+      tokens: data.tokens?.total || 0,
+      input: data.tokens?.input || 0,
+      output: data.tokens?.output || 0,
+      models: data.models || [],
+      lastSeen: data.last_seen_at || '',
+    }))
+    .sort((a, b) => b.tokens - a.tokens)
+
   const totalTokens = stats?.summary?.tokens?.total || 0
   const maxAccountTokens = Math.max(...accountData.map((a) => a.tokens), 1)
+  const maxIPTokens = Math.max(...ipData.map((i) => i.tokens), 1)
 
   const handleExport = (format: 'csv' | 'json') => {
     if (!stats) return
@@ -97,6 +140,15 @@ export function UsagePage() {
           name,
           data.requests?.toString() || '0',
           data.tokens?.total?.toString() || '0',
+        ]),
+        [],
+        ['IP Address', 'Requests', 'Input Tokens', 'Output Tokens', 'Total Tokens'],
+        ...Object.entries(byIP).map(([ip, data]) => [
+          ip,
+          (data.requests || 0).toString(),
+          (data.tokens?.input || 0).toString(),
+          (data.tokens?.output || 0).toString(),
+          (data.tokens?.total || 0).toString(),
         ]),
       ]
       const csv = rows.map((row) => row.join(',')).join('\n')
@@ -216,11 +268,12 @@ export function UsagePage() {
             </Card>
           </div>
 
-          <Tabs defaultValue="timeline" className="space-y-4">
+          <Tabs value={tab} onValueChange={setTab} className="space-y-4">
             <TabsList>
               <TabsTrigger value="timeline">Timeline</TabsTrigger>
               <TabsTrigger value="providers">By Provider</TabsTrigger>
               <TabsTrigger value="accounts">By Account</TabsTrigger>
+              <TabsTrigger value="ips">By IP</TabsTrigger>
             </TabsList>
 
             <TabsContent value="timeline">
@@ -361,6 +414,67 @@ export function UsagePage() {
                           <Progress value={(account.tokens / maxAccountTokens) * 100} />
                         </div>
                       ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="ips">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Usage by Client IP</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {ipData.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground">No IP data available</div>
+                  ) : (
+                    <div className="space-y-6">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b">
+                              <th className="text-left py-3 px-2 font-medium text-muted-foreground">IP Address</th>
+                              <th className="text-right py-3 px-2 font-medium text-muted-foreground">Requests</th>
+                              <th className="text-right py-3 px-2 font-medium text-muted-foreground">Input Tokens</th>
+                              <th className="text-right py-3 px-2 font-medium text-muted-foreground">Output Tokens</th>
+                              <th className="text-right py-3 px-2 font-medium text-muted-foreground">Total Tokens</th>
+                              <th className="text-left py-3 px-2 font-medium text-muted-foreground">Models</th>
+                              <th className="text-right py-3 px-2 font-medium text-muted-foreground">Last Seen</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {ipData.map((row) => (
+                              <tr key={row.ip} className="border-b last:border-0">
+                                <td className="py-3 px-2 font-medium">{row.ip}</td>
+                                <td className="py-3 px-2 text-right text-muted-foreground">{row.requests.toLocaleString()}</td>
+                                <td className="py-3 px-2 text-right text-muted-foreground">{row.input.toLocaleString()}</td>
+                                <td className="py-3 px-2 text-right text-muted-foreground">{row.output.toLocaleString()}</td>
+                                <td className="py-3 px-2 text-right font-medium">{row.tokens.toLocaleString()}</td>
+                                <td className="py-3 px-2 text-muted-foreground">{row.models.join(', ')}</td>
+                                <td className="py-3 px-2 text-right text-muted-foreground">
+                                  {row.lastSeen ? format(new Date(row.lastSeen), 'MMM dd, HH:mm') : '—'}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div className="space-y-4">
+                        {ipData.map((row) => (
+                          <div key={row.ip} className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="font-medium text-sm">{row.ip}</span>
+                              <div className="text-right text-sm">
+                                <span className="text-muted-foreground">{row.requests.toLocaleString()} req</span>
+                                <span className="mx-2">·</span>
+                                <span>{row.tokens.toLocaleString()} tokens</span>
+                              </div>
+                            </div>
+                            <Progress value={(row.tokens / maxIPTokens) * 100} />
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </CardContent>

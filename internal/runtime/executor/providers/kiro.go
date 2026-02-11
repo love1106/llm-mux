@@ -39,6 +39,7 @@ var kiroModelMapping = map[string]string{
 	"claude-4-sonnet":                    "CLAUDE_SONNET_4_20250514_V1_0",
 	"claude-opus-4-20250514":             "CLAUDE_OPUS_4_20250514_V1_0",
 	"claude-opus-4-5-20251101":           "CLAUDE_OPUS_4_5_20251101_V1_0",
+	"claude-opus-4-6-20260211":           "CLAUDE_OPUS_4_6_20260211_V1_0",
 	"claude-3-5-sonnet-20241022":         "CLAUDE_3_5_SONNET_20241022_V1_0",
 	"claude-3-5-haiku-20241022":          "CLAUDE_3_5_HAIKU_20241022_V1_0",
 }

@@ -8,6 +8,7 @@ type UsageStatsResponse struct {
 	ByProvider map[string]UsageProviderStats `json:"by_provider,omitempty"`
 	ByAccount  map[string]UsageAccountStats  `json:"by_account,omitempty"`
 	ByModel    map[string]UsageModelStats    `json:"by_model,omitempty"`
+	ByIP       map[string]UsageIPStats       `json:"by_ip,omitempty"`
 	Timeline   *UsageTimeline                `json:"timeline,omitempty"`
 	Period     UsagePeriod                   `json:"period"`
 }
@@ -58,6 +59,15 @@ type UsageModelStats struct {
 	Failure  int64        `json:"failure"`
 	Tokens   TokenSummary `json:"tokens"`
 	CostUSD  float64      `json:"cost_usd"`
+}
+
+type UsageIPStats struct {
+	Requests   int64        `json:"requests"`
+	Success    int64        `json:"success"`
+	Failure    int64        `json:"failure"`
+	Tokens     TokenSummary `json:"tokens"`
+	Models     []string     `json:"models,omitempty"`
+	LastSeenAt string       `json:"last_seen_at,omitempty"`
 }
 
 // UsageTimeline holds time-series usage data.

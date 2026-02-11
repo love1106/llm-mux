@@ -87,6 +87,7 @@ func (p *LoggerPlugin) HandleUsage(ctx context.Context, record Record) {
 			AuthID:                   record.AuthID,
 			AuthIndex:                record.AuthIndex,
 			Source:                   record.Source,
+			ClientIP:                 record.ClientIP,
 			RequestedAt:              timestamp,
 			Failed:                   failed,
 			InputTokens:              tokens.PromptTokens,

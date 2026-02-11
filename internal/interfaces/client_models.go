@@ -4,8 +4,23 @@
 package interfaces
 
 import (
+	"context"
 	"time"
 )
+
+// ClientIPContextKey is the Go context key for client IP set by middleware.
+type ClientIPContextKey struct{}
+
+// ClientIPFromContext extracts the client IP stored by middleware.
+func ClientIPFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if ip, ok := ctx.Value(ClientIPContextKey{}).(string); ok {
+		return ip
+	}
+	return ""
+}
 
 // GCPProject represents the response structure for a Google Cloud project list request.
 // This structure is used when fetching available projects for a Google Cloud account.

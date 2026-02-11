@@ -17,6 +17,7 @@ type Record struct {
 	AuthID      string
 	AuthIndex   uint64
 	Source      string
+	ClientIP    string
 	RequestedAt time.Time
 	Failed      bool
 	Usage       *ir.Usage
@@ -30,6 +31,7 @@ type UsageRecord struct {
 	AuthID                   string
 	AuthIndex                uint64
 	Source                   string
+	ClientIP                 string
 	RequestedAt              time.Time
 	Failed                   bool
 	InputTokens              int64

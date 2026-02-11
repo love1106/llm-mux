@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nghyane/llm-mux/internal/interfaces"
 	log "github.com/nghyane/llm-mux/internal/logging"
 	"github.com/nghyane/llm-mux/internal/provider"
 	"github.com/nghyane/llm-mux/internal/translator/ir"
@@ -23,6 +24,7 @@ type UsageReporter struct {
 	authIndex   uint64
 	apiKey      string
 	source      string
+	clientIP    string
 	requestedAt time.Time
 	once        sync.Once
 }
@@ -32,12 +34,14 @@ type usageReporter = UsageReporter
 
 func NewUsageReporter(ctx context.Context, provider, model string, auth *provider.Auth) *UsageReporter {
 	apiKey := apiKeyFromContext(ctx)
+	ip := clientIPFromContext(ctx)
 	reporter := &usageReporter{
 		provider:    provider,
 		model:       model,
 		requestedAt: time.Now(),
 		apiKey:      apiKey,
 		source:      resolveUsageSource(auth, apiKey),
+		clientIP:    ip,
 	}
 	if auth != nil {
 		reporter.authID = auth.ID
@@ -115,7 +119,7 @@ func (r *usageReporter) publishWithOutcome(ctx context.Context, u *ir.Usage, fai
 	if u != nil {
 		totalTokens = u.TotalTokens
 	}
-	log.Infof("usage_reporter: publishing usage for %s/%s, tokens=%d", r.provider, r.model, totalTokens)
+	log.Debugf("usage_reporter: publishing usage for %s/%s, tokens=%d", r.provider, r.model, totalTokens)
 	r.once.Do(func() {
 		usage.PublishRecord(ctx, usage.Record{
 			Provider:    r.provider,
@@ -124,6 +128,7 @@ func (r *usageReporter) publishWithOutcome(ctx context.Context, u *ir.Usage, fai
 			APIKey:      r.apiKey,
 			AuthID:      r.authID,
 			AuthIndex:   r.authIndex,
+			ClientIP:    r.clientIP,
 			RequestedAt: r.requestedAt,
 			Failed:      failed,
 			Usage:       u,
@@ -143,6 +148,7 @@ func (r *usageReporter) ensurePublished(ctx context.Context) {
 			APIKey:      r.apiKey,
 			AuthID:      r.authID,
 			AuthIndex:   r.authIndex,
+			ClientIP:    r.clientIP,
 			RequestedAt: r.requestedAt,
 			Failed:      false,
 			Usage:       nil,
@@ -159,7 +165,7 @@ func apiKeyFromContext(ctx context.Context) string {
 	if ctx == nil {
 		return ""
 	}
-	ginCtx, ok := ctx.Value("gin").(*gin.Context)
+	ginCtx, ok := ctx.Value("gin_context").(*gin.Context)
 	if !ok || ginCtx == nil {
 		return ""
 	}
@@ -174,6 +180,17 @@ func apiKeyFromContext(ctx context.Context) string {
 		}
 	}
 	return ""
+}
+
+func clientIPFromContext(ctx context.Context) string {
+	if ip := interfaces.ClientIPFromContext(ctx); ip != "" {
+		return ip
+	}
+	ginCtx, ok := ctx.Value("gin_context").(*gin.Context)
+	if !ok || ginCtx == nil {
+		return ""
+	}
+	return ginCtx.ClientIP()
 }
 
 func resolveUsageSource(auth *provider.Auth, ctxAPIKey string) string {

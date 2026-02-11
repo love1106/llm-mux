@@ -115,10 +115,17 @@ func ensurePostgresSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	CREATE INDEX IF NOT EXISTS idx_usage_requested_at ON usage_records(requested_at);
 	CREATE INDEX IF NOT EXISTS idx_usage_api_key ON usage_records(api_key);
 	CREATE INDEX IF NOT EXISTS idx_usage_provider_model ON usage_records(provider, model);
+	CREATE INDEX IF NOT EXISTS idx_usage_client_ip ON usage_records(client_ip);
 	`
 
-	_, err := pool.Exec(ctx, schema)
-	return err
+	if _, err := pool.Exec(ctx, schema); err != nil {
+		return err
+	}
+
+	// Migration for existing tables: add client_ip column
+	_, _ = pool.Exec(ctx, "ALTER TABLE usage_records ADD COLUMN client_ip TEXT NOT NULL DEFAULT ''")
+
+	return nil
 }
 
 // Start begins background workers (write loop, cleanup loop).
@@ -386,7 +393,44 @@ func (b *PostgresBackend) QueryModelStats(ctx context.Context, since time.Time) 
 	return results, rows.Err()
 }
 
-// Cleanup removes records older than the given time.
+func (b *PostgresBackend) QueryIPStats(ctx context.Context, since time.Time) ([]IPStats, error) {
+	rows, err := b.pool.Query(ctx, `
+		SELECT 
+			COALESCE(NULLIF(client_ip, ''), 'unknown') as client_ip,
+			COUNT(*) as requests,
+			SUM(CASE WHEN failed = false THEN 1 ELSE 0 END) as success_count,
+			SUM(CASE WHEN failed = true THEN 1 ELSE 0 END) as failure_count,
+			COALESCE(SUM(input_tokens), 0) as input_tokens,
+			COALESCE(SUM(output_tokens), 0) as output_tokens,
+			COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
+			COALESCE(SUM(total_tokens), 0) as total_tokens,
+			ARRAY_AGG(DISTINCT NULLIF(model, '')) FILTER (WHERE model != '') as models,
+			MAX(requested_at) as last_seen_at
+		FROM usage_records
+		WHERE requested_at >= $1
+		GROUP BY client_ip
+		ORDER BY SUM(total_tokens) DESC
+	`, since)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query IP stats: %w", err)
+	}
+	defer rows.Close()
+
+	var results []IPStats
+	for rows.Next() {
+		var is IPStats
+		if err := rows.Scan(
+			&is.ClientIP, &is.Requests, &is.SuccessCount, &is.FailureCount,
+			&is.InputTokens, &is.OutputTokens, &is.ReasoningTokens, &is.TotalTokens,
+			&is.Models, &is.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		results = append(results, is)
+	}
+	return results, rows.Err()
+}
+
 func (b *PostgresBackend) Cleanup(ctx context.Context, before time.Time) (int64, error) {
 	result, err := b.pool.Exec(ctx, `
 		DELETE FROM usage_records WHERE requested_at < $1
@@ -449,7 +493,7 @@ func (b *PostgresBackend) writeBatch(ctx context.Context, records []UsageRecord)
 	}
 
 	columns := []string{
-		"provider", "model", "api_key", "auth_id", "auth_index", "source",
+		"provider", "model", "api_key", "auth_id", "auth_index", "source", "client_ip",
 		"requested_at", "failed", "input_tokens", "output_tokens",
 		"reasoning_tokens", "cached_tokens", "total_tokens",
 		"audio_tokens", "cache_creation_input_tokens", "cache_read_input_tokens",
@@ -469,6 +513,7 @@ func (b *PostgresBackend) writeBatch(ctx context.Context, records []UsageRecord)
 				r.AuthID,
 				r.AuthIndex,
 				r.Source,
+				r.ClientIP,
 				r.RequestedAt,
 				r.Failed,
 				r.InputTokens,

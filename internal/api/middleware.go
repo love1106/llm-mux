@@ -2,10 +2,21 @@
 package api
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nghyane/llm-mux/internal/interfaces"
 )
+
+func clientIPMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ip := c.ClientIP()
+		ctx := context.WithValue(c.Request.Context(), interfaces.ClientIPContextKey{}, ip)
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	}
+}
 
 // corsMiddleware returns a Gin middleware handler that adds CORS headers
 // to every response, allowing cross-origin requests.
