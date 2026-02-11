@@ -212,13 +212,15 @@ func (b *PostgresBackend) QueryGlobalStats(ctx context.Context, since time.Time)
 			COUNT(*),
 			SUM(CASE WHEN failed = false THEN 1 ELSE 0 END),
 			SUM(CASE WHEN failed = true THEN 1 ELSE 0 END),
-			COALESCE(SUM(total_tokens), 0)
+			COALESCE(SUM(total_tokens), 0),
+			COALESCE(SUM(cache_creation_input_tokens), 0),
+			COALESCE(SUM(cache_read_input_tokens), 0)
 		FROM usage_records
 		WHERE requested_at >= $1
 	`, since)
 
 	var stats AggregatedStats
-	if err := row.Scan(&stats.TotalRequests, &stats.SuccessCount, &stats.FailureCount, &stats.TotalTokens); err != nil {
+	if err := row.Scan(&stats.TotalRequests, &stats.SuccessCount, &stats.FailureCount, &stats.TotalTokens, &stats.CacheCreationInputTokens, &stats.CacheReadInputTokens); err != nil {
 		return nil, fmt.Errorf("failed to query global stats: %w", err)
 	}
 	return &stats, nil
@@ -294,6 +296,8 @@ func (b *PostgresBackend) QueryProviderStats(ctx context.Context, since time.Tim
 			COALESCE(SUM(output_tokens), 0) as output_tokens,
 			COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
 			COALESCE(SUM(total_tokens), 0) as total_tokens,
+			COALESCE(SUM(cache_creation_input_tokens), 0) as cache_creation_input_tokens,
+			COALESCE(SUM(cache_read_input_tokens), 0) as cache_read_input_tokens,
 			COUNT(DISTINCT NULLIF(auth_id, '')) as account_count,
 			ARRAY_AGG(DISTINCT NULLIF(model, '')) FILTER (WHERE model != '') as models
 		FROM usage_records
@@ -312,6 +316,7 @@ func (b *PostgresBackend) QueryProviderStats(ctx context.Context, since time.Tim
 		if err := rows.Scan(
 			&ps.Provider, &ps.Requests, &ps.SuccessCount, &ps.FailureCount,
 			&ps.InputTokens, &ps.OutputTokens, &ps.ReasoningTokens, &ps.TotalTokens,
+			&ps.CacheCreationInputTokens, &ps.CacheReadInputTokens,
 			&ps.AccountCount, &ps.Models,
 		); err != nil {
 			return nil, err
@@ -332,7 +337,9 @@ func (b *PostgresBackend) QueryAuthStats(ctx context.Context, since time.Time) (
 			COALESCE(SUM(input_tokens), 0) as input_tokens,
 			COALESCE(SUM(output_tokens), 0) as output_tokens,
 			COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
-			COALESCE(SUM(total_tokens), 0) as total_tokens
+			COALESCE(SUM(total_tokens), 0) as total_tokens,
+			COALESCE(SUM(cache_creation_input_tokens), 0) as cache_creation_input_tokens,
+			COALESCE(SUM(cache_read_input_tokens), 0) as cache_read_input_tokens
 		FROM usage_records
 		WHERE requested_at >= $1
 		GROUP BY provider, auth_id
@@ -349,6 +356,7 @@ func (b *PostgresBackend) QueryAuthStats(ctx context.Context, since time.Time) (
 		if err := rows.Scan(
 			&as.Provider, &as.AuthID, &as.Requests, &as.SuccessCount, &as.FailureCount,
 			&as.InputTokens, &as.OutputTokens, &as.ReasoningTokens, &as.TotalTokens,
+			&as.CacheCreationInputTokens, &as.CacheReadInputTokens,
 		); err != nil {
 			return nil, err
 		}
@@ -368,7 +376,9 @@ func (b *PostgresBackend) QueryModelStats(ctx context.Context, since time.Time) 
 			COALESCE(SUM(input_tokens), 0) as input_tokens,
 			COALESCE(SUM(output_tokens), 0) as output_tokens,
 			COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
-			COALESCE(SUM(total_tokens), 0) as total_tokens
+			COALESCE(SUM(total_tokens), 0) as total_tokens,
+			COALESCE(SUM(cache_creation_input_tokens), 0) as cache_creation_input_tokens,
+			COALESCE(SUM(cache_read_input_tokens), 0) as cache_read_input_tokens
 		FROM usage_records
 		WHERE requested_at >= $1
 		GROUP BY model, provider
@@ -385,6 +395,7 @@ func (b *PostgresBackend) QueryModelStats(ctx context.Context, since time.Time) 
 		if err := rows.Scan(
 			&ms.Model, &ms.Provider, &ms.Requests, &ms.SuccessCount, &ms.FailureCount,
 			&ms.InputTokens, &ms.OutputTokens, &ms.ReasoningTokens, &ms.TotalTokens,
+			&ms.CacheCreationInputTokens, &ms.CacheReadInputTokens,
 		); err != nil {
 			return nil, err
 		}
@@ -404,6 +415,8 @@ func (b *PostgresBackend) QueryIPStats(ctx context.Context, since time.Time) ([]
 			COALESCE(SUM(output_tokens), 0) as output_tokens,
 			COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
 			COALESCE(SUM(total_tokens), 0) as total_tokens,
+			COALESCE(SUM(cache_creation_input_tokens), 0) as cache_creation_input_tokens,
+			COALESCE(SUM(cache_read_input_tokens), 0) as cache_read_input_tokens,
 			ARRAY_AGG(DISTINCT NULLIF(model, '')) FILTER (WHERE model != '') as models,
 			MAX(requested_at) as last_seen_at
 		FROM usage_records
@@ -422,6 +435,7 @@ func (b *PostgresBackend) QueryIPStats(ctx context.Context, since time.Time) ([]
 		if err := rows.Scan(
 			&is.ClientIP, &is.Requests, &is.SuccessCount, &is.FailureCount,
 			&is.InputTokens, &is.OutputTokens, &is.ReasoningTokens, &is.TotalTokens,
+			&is.CacheCreationInputTokens, &is.CacheReadInputTokens,
 			&is.Models, &is.LastSeenAt,
 		); err != nil {
 			return nil, err

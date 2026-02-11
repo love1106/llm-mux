@@ -53,6 +53,7 @@ func (h *Handler) GetUsageStatistics(c *gin.Context) {
 	} else if len(providerStats) > 0 {
 		byProvider := make(map[string]UsageProviderStats, len(providerStats))
 		var totalInput, totalOutput, totalReasoning int64
+		var totalCacheCreation, totalCacheRead int64
 		for _, ps := range providerStats {
 			byProvider[ps.Provider] = UsageProviderStats{
 				Requests: ps.Requests,
@@ -64,17 +65,21 @@ func (h *Handler) GetUsageStatistics(c *gin.Context) {
 					Output:    ps.OutputTokens,
 					Reasoning: ps.ReasoningTokens,
 				},
+				Cache:        buildCacheSummary(ps.CacheCreationInputTokens, ps.CacheReadInputTokens, ps.InputTokens),
 				AccountCount: ps.AccountCount,
 				Models:       ps.Models,
 			}
 			totalInput += ps.InputTokens
 			totalOutput += ps.OutputTokens
 			totalReasoning += ps.ReasoningTokens
+			totalCacheCreation += ps.CacheCreationInputTokens
+			totalCacheRead += ps.CacheReadInputTokens
 		}
 		response.ByProvider = byProvider
 		response.Summary.Tokens.Input = totalInput
 		response.Summary.Tokens.Output = totalOutput
 		response.Summary.Tokens.Reasoning = totalReasoning
+		response.Summary.Cache = buildCacheSummary(totalCacheCreation, totalCacheRead, totalInput)
 	}
 
 	if authStats, err := backend.QueryAuthStats(ctx, from); err != nil {
@@ -119,6 +124,7 @@ func (h *Handler) GetUsageStatistics(c *gin.Context) {
 					Output:    ms.OutputTokens,
 					Reasoning: ms.ReasoningTokens,
 				},
+				Cache:   buildCacheSummary(ms.CacheCreationInputTokens, ms.CacheReadInputTokens, ms.InputTokens),
 				CostUSD: modelCost,
 			}
 		}
@@ -186,6 +192,21 @@ func (h *Handler) GetUsageStatistics(c *gin.Context) {
 	}
 
 	respondOK(c, response)
+}
+
+func buildCacheSummary(cacheCreation, cacheRead, inputTokens int64) *CacheSummary {
+	if cacheCreation == 0 && cacheRead == 0 {
+		return nil
+	}
+	var hitRate float64
+	if inputTokens > 0 {
+		hitRate = float64(cacheRead) / float64(inputTokens)
+	}
+	return &CacheSummary{
+		CacheCreationTokens: cacheCreation,
+		CacheReadTokens:     cacheRead,
+		CacheHitRate:        hitRate,
+	}
 }
 
 func (h *Handler) parseTimeRange(c *gin.Context, retentionDays int) (from, to time.Time) {

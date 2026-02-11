@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/nghyane/llm-mux/internal/provider"
 	"github.com/nghyane/llm-mux/internal/runtime/executor"
 	"github.com/nghyane/llm-mux/internal/runtime/executor/stream"
+	"github.com/nghyane/llm-mux/internal/sseutil"
 	"github.com/nghyane/llm-mux/internal/translator/ir"
 	"github.com/nghyane/llm-mux/internal/translator/to_ir"
 	"github.com/nghyane/llm-mux/internal/util"
@@ -90,10 +92,17 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *provider.Auth, req p
 	reporter := e.NewUsageReporter(ctx, e.Identifier(), req.Model, auth)
 	defer reporter.TrackFailure(ctx, &err)
 	from := opts.SourceFormat
-	isStreaming := from.String() != "claude"
-	body, err := stream.TranslateToClaude(e.Cfg, from, req.Model, req.Payload, isStreaming, req.Metadata)
-	if err != nil {
-		return resp, err
+	var body []byte
+	if from.String() == "claude" {
+		// Passthrough: preserve original Claude payload structure for prompt caching.
+		// IR round-trip (Claude→IR→Claude) flattens multi-part system arrays into a
+		// single string, which invalidates Anthropic's prompt cache on every turn.
+		body = sseutil.SanitizeUndefinedValues(req.Payload)
+	} else {
+		body, err = stream.TranslateToClaude(e.Cfg, from, req.Model, req.Payload, true, req.Metadata)
+		if err != nil {
+			return resp, err
+		}
 	}
 	modelForUpstream := req.Model
 	if modelOverride := e.resolveUpstreamModel(req.Model, auth); modelOverride != "" {
@@ -157,7 +166,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *provider.Auth, req p
 	if err != nil {
 		return resp, err
 	}
-	if isStreaming {
+	if from.String() != "claude" {
 		lines := bytes.Split(data, []byte("\n"))
 		for _, line := range lines {
 			if events, err := to_ir.ParseClaudeChunk(line); err == nil && len(events) > 0 {
@@ -192,9 +201,15 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *provider.Auth,
 	reporter := e.NewUsageReporter(ctx, e.Identifier(), req.Model, auth)
 	defer reporter.TrackFailure(ctx, &err)
 	from := opts.SourceFormat
-	body, err := stream.TranslateToClaude(e.Cfg, from, req.Model, req.Payload, true, req.Metadata)
-	if err != nil {
-		return nil, err
+	var body []byte
+	if from.String() == "claude" {
+		// Passthrough: preserve original payload structure for prompt caching
+		body = sseutil.SanitizeUndefinedValues(req.Payload)
+	} else {
+		body, err = stream.TranslateToClaude(e.Cfg, from, req.Model, req.Payload, true, req.Metadata)
+		if err != nil {
+			return nil, err
+		}
 	}
 	modelForUpstream := req.Model
 	if modelOverride := e.resolveUpstreamModel(req.Model, auth); modelOverride != "" {
@@ -202,7 +217,6 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *provider.Auth,
 		modelForUpstream = modelOverride
 	}
 	body = e.injectThinkingConfig(req.Model, body)
-	// Skip system instruction injection for haiku models (consistent with non-streaming path)
 	if !strings.HasPrefix(modelForUpstream, "claude-3-5-haiku") {
 		body = checkSystemInstructions(body)
 	}
@@ -572,20 +586,31 @@ func claudeCreds(a *provider.Auth) (apiKey, baseURL string) {
 }
 
 func checkSystemInstructions(payload []byte) []byte {
+	const claudeCodeText = "You are Claude Code, Anthropic's official CLI for Claude."
+	instructionPart := `{"type":"text","text":"` + claudeCodeText + `"}`
+
 	system := gjson.GetBytes(payload, "system")
-	claudeCodeInstructions := `[{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."}]`
+
 	if system.IsArray() {
-		if gjson.GetBytes(payload, "system.0.text").String() != "You are Claude Code, Anthropic's official CLI for Claude." {
-			system.ForEach(func(_, part gjson.Result) bool {
-				if part.Get("type").String() == "text" {
-					claudeCodeInstructions, _ = sjson.SetRaw(claudeCodeInstructions, "-1", part.Raw)
-				}
-				return true
-			})
-			payload, _ = sjson.SetRawBytes(payload, "system", []byte(claudeCodeInstructions))
+		if gjson.GetBytes(payload, "system.0.text").String() == claudeCodeText {
+			return payload
 		}
+		newSystem := "[" + instructionPart
+		system.ForEach(func(_, part gjson.Result) bool {
+			newSystem += "," + part.Raw
+			return true
+		})
+		newSystem += "]"
+		payload, _ = sjson.SetRawBytes(payload, "system", []byte(newSystem))
+	} else if system.Exists() && system.String() != "" {
+		text := system.String()
+		if strings.HasPrefix(text, claudeCodeText) {
+			return payload
+		}
+		newSystem := `[` + instructionPart + `,{"type":"text","text":` + strconv.Quote(text) + `}]`
+		payload, _ = sjson.SetRawBytes(payload, "system", []byte(newSystem))
 	} else {
-		payload, _ = sjson.SetRawBytes(payload, "system", []byte(claudeCodeInstructions))
+		payload, _ = sjson.SetRawBytes(payload, "system", []byte("["+instructionPart+"]"))
 	}
 	return payload
 }

@@ -256,13 +256,15 @@ func (b *SQLiteBackend) QueryGlobalStats(ctx context.Context, since time.Time) (
 			COALESCE(COUNT(*), 0),
 			COALESCE(SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN failed = 1 THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(total_tokens), 0)
+			COALESCE(SUM(total_tokens), 0),
+			COALESCE(SUM(cache_creation_input_tokens), 0),
+			COALESCE(SUM(cache_read_input_tokens), 0)
 		FROM usage_records
 		WHERE requested_at >= ?
 	`, since)
 
 	var stats AggregatedStats
-	if err := row.Scan(&stats.TotalRequests, &stats.SuccessCount, &stats.FailureCount, &stats.TotalTokens); err != nil {
+	if err := row.Scan(&stats.TotalRequests, &stats.SuccessCount, &stats.FailureCount, &stats.TotalTokens, &stats.CacheCreationInputTokens, &stats.CacheReadInputTokens); err != nil {
 		return nil, fmt.Errorf("failed to query global stats: %w", err)
 	}
 	return &stats, nil
@@ -340,6 +342,8 @@ func (b *SQLiteBackend) QueryProviderStats(ctx context.Context, since time.Time)
 			COALESCE(SUM(output_tokens), 0) as output_tokens,
 			COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
 			COALESCE(SUM(total_tokens), 0) as total_tokens,
+			COALESCE(SUM(cache_creation_input_tokens), 0) as cache_creation_input_tokens,
+			COALESCE(SUM(cache_read_input_tokens), 0) as cache_read_input_tokens,
 			COUNT(DISTINCT NULLIF(auth_id, '')) as account_count,
 			GROUP_CONCAT(DISTINCT NULLIF(model, '')) as models
 		FROM usage_records
@@ -359,6 +363,7 @@ func (b *SQLiteBackend) QueryProviderStats(ctx context.Context, since time.Time)
 		if err := rows.Scan(
 			&ps.Provider, &ps.Requests, &ps.SuccessCount, &ps.FailureCount,
 			&ps.InputTokens, &ps.OutputTokens, &ps.ReasoningTokens, &ps.TotalTokens,
+			&ps.CacheCreationInputTokens, &ps.CacheReadInputTokens,
 			&ps.AccountCount, &modelsStr,
 		); err != nil {
 			return nil, err
@@ -382,7 +387,9 @@ func (b *SQLiteBackend) QueryAuthStats(ctx context.Context, since time.Time) ([]
 			COALESCE(SUM(input_tokens), 0) as input_tokens,
 			COALESCE(SUM(output_tokens), 0) as output_tokens,
 			COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
-			COALESCE(SUM(total_tokens), 0) as total_tokens
+			COALESCE(SUM(total_tokens), 0) as total_tokens,
+			COALESCE(SUM(cache_creation_input_tokens), 0) as cache_creation_input_tokens,
+			COALESCE(SUM(cache_read_input_tokens), 0) as cache_read_input_tokens
 		FROM usage_records
 		WHERE requested_at >= ?
 		GROUP BY provider, auth_id
@@ -399,6 +406,7 @@ func (b *SQLiteBackend) QueryAuthStats(ctx context.Context, since time.Time) ([]
 		if err := rows.Scan(
 			&as.Provider, &as.AuthID, &as.Requests, &as.SuccessCount, &as.FailureCount,
 			&as.InputTokens, &as.OutputTokens, &as.ReasoningTokens, &as.TotalTokens,
+			&as.CacheCreationInputTokens, &as.CacheReadInputTokens,
 		); err != nil {
 			return nil, err
 		}
@@ -418,7 +426,9 @@ func (b *SQLiteBackend) QueryModelStats(ctx context.Context, since time.Time) ([
 			COALESCE(SUM(input_tokens), 0) as input_tokens,
 			COALESCE(SUM(output_tokens), 0) as output_tokens,
 			COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
-			COALESCE(SUM(total_tokens), 0) as total_tokens
+			COALESCE(SUM(total_tokens), 0) as total_tokens,
+			COALESCE(SUM(cache_creation_input_tokens), 0) as cache_creation_input_tokens,
+			COALESCE(SUM(cache_read_input_tokens), 0) as cache_read_input_tokens
 		FROM usage_records
 		WHERE requested_at >= ?
 		GROUP BY model, provider
@@ -435,6 +445,7 @@ func (b *SQLiteBackend) QueryModelStats(ctx context.Context, since time.Time) ([
 		if err := rows.Scan(
 			&ms.Model, &ms.Provider, &ms.Requests, &ms.SuccessCount, &ms.FailureCount,
 			&ms.InputTokens, &ms.OutputTokens, &ms.ReasoningTokens, &ms.TotalTokens,
+			&ms.CacheCreationInputTokens, &ms.CacheReadInputTokens,
 		); err != nil {
 			return nil, err
 		}
@@ -454,6 +465,8 @@ func (b *SQLiteBackend) QueryIPStats(ctx context.Context, since time.Time) ([]IP
 			COALESCE(SUM(output_tokens), 0) as output_tokens,
 			COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
 			COALESCE(SUM(total_tokens), 0) as total_tokens,
+			COALESCE(SUM(cache_creation_input_tokens), 0) as cache_creation_input_tokens,
+			COALESCE(SUM(cache_read_input_tokens), 0) as cache_read_input_tokens,
 			GROUP_CONCAT(DISTINCT NULLIF(model, '')) as models,
 			MAX(requested_at) as last_seen_at
 		FROM usage_records
@@ -474,6 +487,7 @@ func (b *SQLiteBackend) QueryIPStats(ctx context.Context, since time.Time) ([]IP
 		if err := rows.Scan(
 			&is.ClientIP, &is.Requests, &is.SuccessCount, &is.FailureCount,
 			&is.InputTokens, &is.OutputTokens, &is.ReasoningTokens, &is.TotalTokens,
+			&is.CacheCreationInputTokens, &is.CacheReadInputTokens,
 			&modelsStr, &lastSeenStr,
 		); err != nil {
 			return nil, err

@@ -22,7 +22,7 @@ import {
   Bar,
   Legend,
 } from 'recharts'
-import { Download, RefreshCw, TrendingUp, Minus } from 'lucide-react'
+import { Download, RefreshCw, TrendingUp, Minus, Database } from 'lucide-react'
 import { format } from 'date-fns'
 
 type TimeRange = '1h' | '24h' | '7d' | '30d'
@@ -211,7 +211,7 @@ export function UsagePage() {
         <div className="text-center py-8 text-muted-foreground">Loading usage data...</div>
       ) : (
         <>
-          <div className="grid gap-4 md:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-5">
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Total Requests</CardTitle>
@@ -263,6 +263,30 @@ export function UsagePage() {
                 <div className="flex items-center gap-1 text-xs text-muted-foreground">
                   <Minus className="h-3 w-3" />
                   <span>Average</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">Cache Hit Rate</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  {stats?.summary?.cache
+                    ? `${(stats.summary.cache.cache_hit_rate * 100).toFixed(1)}%`
+                    : '—'}
+                </div>
+                <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <Database className="h-3 w-3" />
+                  {stats?.summary?.cache ? (
+                    <span>
+                      Created: {stats.summary.cache.cache_creation_tokens.toLocaleString()} / Read:{' '}
+                      {stats.summary.cache.cache_read_tokens.toLocaleString()}
+                    </span>
+                  ) : (
+                    <span>No cache data</span>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -387,6 +411,49 @@ export function UsagePage() {
                   </CardContent>
                 </Card>
               </div>
+
+              {Object.entries(byProvider).some(([, d]) => d.cache) && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Database className="h-4 w-4" />
+                      Prompt Cache by Provider
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b">
+                            <th className="text-left py-3 px-2 font-medium text-muted-foreground">Provider</th>
+                            <th className="text-right py-3 px-2 font-medium text-muted-foreground">Creation Tokens</th>
+                            <th className="text-right py-3 px-2 font-medium text-muted-foreground">Read Tokens</th>
+                            <th className="text-right py-3 px-2 font-medium text-muted-foreground">Hit Rate</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {Object.entries(byProvider)
+                            .filter(([, d]) => d.cache)
+                            .map(([name, d]) => (
+                              <tr key={name} className="border-b last:border-0">
+                                <td className="py-3 px-2 font-medium capitalize">{name}</td>
+                                <td className="py-3 px-2 text-right text-muted-foreground">
+                                  {d.cache!.cache_creation_tokens.toLocaleString()}
+                                </td>
+                                <td className="py-3 px-2 text-right text-muted-foreground">
+                                  {d.cache!.cache_read_tokens.toLocaleString()}
+                                </td>
+                                <td className="py-3 px-2 text-right font-medium">
+                                  {(d.cache!.cache_hit_rate * 100).toFixed(1)}%
+                                </td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
             </TabsContent>
 
             <TabsContent value="accounts">

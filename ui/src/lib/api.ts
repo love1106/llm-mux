@@ -59,6 +59,12 @@ export interface AuthFile {
   quota_state?: QuotaState
 }
 
+export interface CacheInfo {
+  cache_creation_tokens: number
+  cache_read_tokens: number
+  cache_hit_rate: number
+}
+
 export interface UsageStats {
   summary: {
     total_requests: number
@@ -70,10 +76,11 @@ export interface UsageStats {
       output: number
     }
     cost_usd: number
+    cache?: CacheInfo
   }
-  by_provider: Record<string, { requests: number; tokens: { total: number; input: number; output: number }; cost_usd: number }>
+  by_provider: Record<string, { requests: number; tokens: { total: number; input: number; output: number }; cost_usd: number; cache?: CacheInfo }>
   by_account: Record<string, { provider: string; auth_id: string; requests: number; tokens: { total: number; input: number; output: number } }>
-  by_model: Record<string, { provider: string; requests: number; tokens: { total: number; input: number; output: number }; cost_usd: number }>
+  by_model: Record<string, { provider: string; requests: number; tokens: { total: number; input: number; output: number }; cost_usd: number; cache?: CacheInfo }>
   by_ip?: Record<string, { requests: number; success: number; failure: number; tokens: { total: number; input: number; output: number; reasoning: number }; models: string[]; last_seen_at: string }>
   timeline?: {
     by_day: Array<{ day: string; requests: number; tokens: number }>

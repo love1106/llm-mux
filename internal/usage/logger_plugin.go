@@ -75,7 +75,7 @@ func (p *LoggerPlugin) HandleUsage(ctx context.Context, record Record) {
 
 	// Update fast counters (lock-free)
 	if p.counters != nil {
-		p.counters.Record(failed, tokens.TotalTokens)
+		p.counters.Record(failed, tokens.TotalTokens, tokens.CacheCreationInputTokens, tokens.CacheReadInputTokens)
 	}
 
 	// Enqueue to backend for persistence
@@ -150,6 +150,8 @@ func Initialize(cfg BackendConfig) error {
 			stats.SuccessCount,
 			stats.FailureCount,
 			stats.TotalTokens,
+			stats.CacheCreationInputTokens,
+			stats.CacheReadInputTokens,
 		)
 		log.Infof("Bootstrapped usage counters: %d requests, %d tokens", stats.TotalRequests, stats.TotalTokens)
 	}

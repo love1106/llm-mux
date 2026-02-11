@@ -4,10 +4,12 @@ import "time"
 
 // AggregatedStats represents summary statistics for a time period.
 type AggregatedStats struct {
-	TotalRequests int64 `json:"total_requests"`
-	SuccessCount  int64 `json:"success_count"`
-	FailureCount  int64 `json:"failure_count"`
-	TotalTokens   int64 `json:"total_tokens"`
+	TotalRequests            int64 `json:"total_requests"`
+	SuccessCount             int64 `json:"success_count"`
+	FailureCount             int64 `json:"failure_count"`
+	TotalTokens              int64 `json:"total_tokens"`
+	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
 }
 
 // DailyStats represents aggregated metrics for a single day.
@@ -26,56 +28,64 @@ type HourlyStats struct {
 
 // ProviderStats represents aggregated metrics per provider.
 type ProviderStats struct {
-	Provider        string   `json:"provider"`
-	Requests        int64    `json:"requests"`
-	SuccessCount    int64    `json:"success_count"`
-	FailureCount    int64    `json:"failure_count"`
-	InputTokens     int64    `json:"input_tokens"`
-	OutputTokens    int64    `json:"output_tokens"`
-	ReasoningTokens int64    `json:"reasoning_tokens"`
-	TotalTokens     int64    `json:"total_tokens"`
-	AccountCount    int64    `json:"account_count"`
-	Models          []string `json:"models"`
+	Provider                 string   `json:"provider"`
+	Requests                 int64    `json:"requests"`
+	SuccessCount             int64    `json:"success_count"`
+	FailureCount             int64    `json:"failure_count"`
+	InputTokens              int64    `json:"input_tokens"`
+	OutputTokens             int64    `json:"output_tokens"`
+	ReasoningTokens          int64    `json:"reasoning_tokens"`
+	TotalTokens              int64    `json:"total_tokens"`
+	CacheCreationInputTokens int64    `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64    `json:"cache_read_input_tokens"`
+	AccountCount             int64    `json:"account_count"`
+	Models                   []string `json:"models"`
 }
 
 // AuthStats represents aggregated metrics per auth account.
 type AuthStats struct {
-	Provider        string `json:"provider"`
-	AuthID          string `json:"auth_id"`
-	Requests        int64  `json:"requests"`
-	SuccessCount    int64  `json:"success_count"`
-	FailureCount    int64  `json:"failure_count"`
-	InputTokens     int64  `json:"input_tokens"`
-	OutputTokens    int64  `json:"output_tokens"`
-	ReasoningTokens int64  `json:"reasoning_tokens"`
-	TotalTokens     int64  `json:"total_tokens"`
+	Provider                 string `json:"provider"`
+	AuthID                   string `json:"auth_id"`
+	Requests                 int64  `json:"requests"`
+	SuccessCount             int64  `json:"success_count"`
+	FailureCount             int64  `json:"failure_count"`
+	InputTokens              int64  `json:"input_tokens"`
+	OutputTokens             int64  `json:"output_tokens"`
+	ReasoningTokens          int64  `json:"reasoning_tokens"`
+	TotalTokens              int64  `json:"total_tokens"`
+	CacheCreationInputTokens int64  `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64  `json:"cache_read_input_tokens"`
 }
 
 // ModelStats represents aggregated metrics per model.
 type ModelStats struct {
-	Model           string `json:"model"`
-	Provider        string `json:"provider"`
-	Requests        int64  `json:"requests"`
-	SuccessCount    int64  `json:"success_count"`
-	FailureCount    int64  `json:"failure_count"`
-	InputTokens     int64  `json:"input_tokens"`
-	OutputTokens    int64  `json:"output_tokens"`
-	ReasoningTokens int64  `json:"reasoning_tokens"`
-	TotalTokens     int64  `json:"total_tokens"`
+	Model                    string `json:"model"`
+	Provider                 string `json:"provider"`
+	Requests                 int64  `json:"requests"`
+	SuccessCount             int64  `json:"success_count"`
+	FailureCount             int64  `json:"failure_count"`
+	InputTokens              int64  `json:"input_tokens"`
+	OutputTokens             int64  `json:"output_tokens"`
+	ReasoningTokens          int64  `json:"reasoning_tokens"`
+	TotalTokens              int64  `json:"total_tokens"`
+	CacheCreationInputTokens int64  `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64  `json:"cache_read_input_tokens"`
 }
 
 // IPStats represents aggregated metrics per client IP address.
 type IPStats struct {
-	ClientIP        string    `json:"client_ip"`
-	Requests        int64     `json:"requests"`
-	SuccessCount    int64     `json:"success_count"`
-	FailureCount    int64     `json:"failure_count"`
-	InputTokens     int64     `json:"input_tokens"`
-	OutputTokens    int64     `json:"output_tokens"`
-	ReasoningTokens int64     `json:"reasoning_tokens"`
-	TotalTokens     int64     `json:"total_tokens"`
-	Models          []string  `json:"models"`
-	LastSeenAt      time.Time `json:"last_seen_at"`
+	ClientIP                 string    `json:"client_ip"`
+	Requests                 int64     `json:"requests"`
+	SuccessCount             int64     `json:"success_count"`
+	FailureCount             int64     `json:"failure_count"`
+	InputTokens              int64     `json:"input_tokens"`
+	OutputTokens             int64     `json:"output_tokens"`
+	ReasoningTokens          int64     `json:"reasoning_tokens"`
+	TotalTokens              int64     `json:"total_tokens"`
+	CacheCreationInputTokens int64     `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64     `json:"cache_read_input_tokens"`
+	Models                   []string  `json:"models"`
+	LastSeenAt               time.Time `json:"last_seen_at"`
 }
 
 // DetailRecord represents a single recent request for detailed views.

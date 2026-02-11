@@ -15,11 +15,12 @@ type UsageStatsResponse struct {
 
 // UsageSummary holds the aggregate usage summary.
 type UsageSummary struct {
-	TotalRequests int64        `json:"total_requests"`
-	SuccessCount  int64        `json:"success_count"`
-	FailureCount  int64        `json:"failure_count"`
-	Tokens        TokenSummary `json:"tokens"`
-	CostUSD       float64      `json:"cost_usd"`
+	TotalRequests int64         `json:"total_requests"`
+	SuccessCount  int64         `json:"success_count"`
+	FailureCount  int64         `json:"failure_count"`
+	Tokens        TokenSummary  `json:"tokens"`
+	Cache         *CacheSummary `json:"cache,omitempty"`
+	CostUSD       float64       `json:"cost_usd"`
 }
 
 // TokenSummary holds token breakdown.
@@ -30,15 +31,23 @@ type TokenSummary struct {
 	Reasoning int64 `json:"reasoning,omitempty"`
 }
 
+// CacheSummary holds prompt caching metrics.
+type CacheSummary struct {
+	CacheCreationTokens int64   `json:"cache_creation_tokens"`
+	CacheReadTokens     int64   `json:"cache_read_tokens"`
+	CacheHitRate        float64 `json:"cache_hit_rate"`
+}
+
 // UsageProviderStats represents per-provider statistics.
 type UsageProviderStats struct {
-	Requests     int64        `json:"requests"`
-	Success      int64        `json:"success"`
-	Failure      int64        `json:"failure"`
-	Tokens       TokenSummary `json:"tokens"`
-	CostUSD      float64      `json:"cost_usd"`
-	AccountCount int64        `json:"accounts"`
-	Models       []string     `json:"models,omitempty"`
+	Requests     int64         `json:"requests"`
+	Success      int64         `json:"success"`
+	Failure      int64         `json:"failure"`
+	Tokens       TokenSummary  `json:"tokens"`
+	Cache        *CacheSummary `json:"cache,omitempty"`
+	CostUSD      float64       `json:"cost_usd"`
+	AccountCount int64         `json:"accounts"`
+	Models       []string      `json:"models,omitempty"`
 }
 
 // UsageAccountStats represents per-auth-account statistics.
@@ -53,12 +62,13 @@ type UsageAccountStats struct {
 
 // UsageModelStats represents per-model statistics.
 type UsageModelStats struct {
-	Provider string       `json:"provider"`
-	Requests int64        `json:"requests"`
-	Success  int64        `json:"success"`
-	Failure  int64        `json:"failure"`
-	Tokens   TokenSummary `json:"tokens"`
-	CostUSD  float64      `json:"cost_usd"`
+	Provider string        `json:"provider"`
+	Requests int64         `json:"requests"`
+	Success  int64         `json:"success"`
+	Failure  int64         `json:"failure"`
+	Tokens   TokenSummary  `json:"tokens"`
+	Cache    *CacheSummary `json:"cache,omitempty"`
+	CostUSD  float64       `json:"cost_usd"`
 }
 
 type UsageIPStats struct {

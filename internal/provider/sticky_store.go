@@ -10,8 +10,8 @@ import (
 const (
 	numStickyShards       = 16
 	maxEntriesPerShard    = 256
-	stickyTTL             = 60 * time.Second
-	stickyCleanupInterval = 2 * time.Minute
+	stickyTTL             = 5 * time.Minute
+	stickyCleanupInterval = 5 * time.Minute
 )
 
 type stickyEntry struct {

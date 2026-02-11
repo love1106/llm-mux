@@ -284,7 +284,7 @@ func NewDefaultConfig() *Config {
 		Port:                   8317,
 		AuthDir:                "$XDG_CONFIG_HOME/llm-mux/auth",
 		DisableAuth:            true,
-		RequestRetry:           3,
+		RequestRetry:           1,
 		MaxRetryInterval:       30,
 		StreamTimeout:          600, // 10 minutes for large context processing
 		QuotaWindow:            300,
