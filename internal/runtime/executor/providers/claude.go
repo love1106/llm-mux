@@ -531,11 +531,14 @@ func applyClaudeHeaders(r *http.Request, auth *provider.Auth, apiKey string, str
 		ginHeaders = ginCtx.Request.Header
 	}
 
-	baseBetas := "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14"
+	baseBetas := "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14,context-management-2025-06-27"
 	if val := strings.TrimSpace(ginHeaders.Get("Anthropic-Beta")); val != "" {
 		baseBetas = val
 		if !strings.Contains(val, "oauth") {
 			baseBetas += ",oauth-2025-04-20"
+		}
+		if !strings.Contains(val, "context-management") {
+			baseBetas += ",context-management-2025-06-27"
 		}
 	}
 
