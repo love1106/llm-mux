@@ -119,10 +119,14 @@ func (h *Handler) OAuthStart(c *gin.Context) {
 	// Register OAuth request with codeVerifier for PKCE providers
 	oauthReq := oauthService.Registry().Create(state, providerName, oauth.ModeWebUI)
 	oauthReq.CodeVerifier = codeVerifier
-	if req.Manual && providerName == "claude" {
-		oauthReq.RedirectURI = claude.RedirectURIManual
+	if providerName == "claude" {
+		if req.Manual {
+			oauthReq.RedirectURI = claude.RedirectURIManual
+		} else {
+			oauthReq.RedirectURI = claude.RedirectURILocal
+		}
 	} else {
-		oauthReq.RedirectURI = claude.RedirectURILocal
+		oauthReq.RedirectURI = oauth.GetRedirectURI(providerName)
 	}
 
 	if !req.Manual {
@@ -193,6 +197,11 @@ func (h *Handler) pollOAuthCallback(ctx context.Context, cancel context.CancelFu
 	if err != nil {
 		oauthService.Registry().Fail(state, fmt.Sprintf("Failed to save: %v", err))
 		return
+	}
+
+	// Register in AuthRegistry so the account appears immediately
+	if regErr := h.registerAuthFromFile(ctx, savedPath, nil); regErr != nil {
+		log.WithError(regErr).WithField("path", savedPath).Warn("Failed to register auth in memory after OAuth save")
 	}
 
 	oauthService.Registry().Complete(state, &oauth.OAuthResult{State: state, Code: "success"})
@@ -397,6 +406,10 @@ func (h *Handler) finishAuthFlow(ctx context.Context, state string, record *prov
 		return
 	}
 
+	if regErr := h.registerAuthFromFile(ctx, savedPath, nil); regErr != nil {
+		log.WithError(regErr).WithField("path", savedPath).Warn("Failed to register auth in memory after OAuth save")
+	}
+
 	oauthService.Registry().Complete(state, &oauth.OAuthResult{State: state, Code: "success"})
 	log.WithFields(log.Fields{"state": state, "path": savedPath}).Infof("%s authentication successful", record.Provider)
 }
@@ -473,6 +486,10 @@ func (h *Handler) OAuthComplete(c *gin.Context) {
 		oauthService.Registry().Fail(req.State, err.Error())
 		c.JSON(http.StatusInternalServerError, OAuthCompleteResponse{Status: "error", Error: fmt.Sprintf("Failed to save credentials: %v", err)})
 		return
+	}
+
+	if regErr := h.registerAuthFromFile(ctx, savedPath, nil); regErr != nil {
+		log.WithError(regErr).WithField("path", savedPath).Warn("Failed to register auth in memory after OAuth save")
 	}
 
 	oauthService.Registry().Complete(req.State, &oauth.OAuthResult{State: req.State, Code: "success"})
@@ -593,7 +610,11 @@ var googleOAuthConfigs = map[string]googleOAuthConfig{
 		ClientSecret: oauth.GeminiClientSecret,
 		CallbackPath: "oauth2callback",
 		FetchProject: false,
-		Scopes:       []string{"openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/cloud-platform"},
+		Scopes: []string{
+			"openid",
+			"https://www.googleapis.com/auth/userinfo.email",
+			"https://www.googleapis.com/auth/cloud-platform",
+		},
 	},
 	"antigravity": {
 		ClientID:     oauth.AntigravityClientID,

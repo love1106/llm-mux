@@ -146,8 +146,14 @@ func (e *GeminiCLIExecutor) Execute(ctx context.Context, auth *provider.Auth, re
 			return resp, err
 		}
 
-		data, errRead := io.ReadAll(httpResp.Body)
-		if errClose := httpResp.Body.Close(); errClose != nil {
+		decodedBody, errDecode := executor.DecodeResponseBody(httpResp.Body, httpResp.Header.Get("Content-Encoding"))
+		if errDecode != nil {
+			_ = httpResp.Body.Close()
+			err = fmt.Errorf("failed to decode response body: %w", errDecode)
+			return resp, err
+		}
+		data, errRead := io.ReadAll(decodedBody)
+		if errClose := decodedBody.Close(); errClose != nil {
 			log.Errorf("gemini cli executor: close response body error: %v", errClose)
 		}
 		if errRead != nil {
@@ -294,9 +300,15 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *provider.Au
 			err = errDo
 			return nil, err
 		}
+		decodedBody, errDecode := executor.DecodeResponseBody(httpResp.Body, httpResp.Header.Get("Content-Encoding"))
+		if errDecode != nil {
+			_ = httpResp.Body.Close()
+			err = fmt.Errorf("failed to decode response body: %w", errDecode)
+			return nil, err
+		}
 		if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
-			data, errRead := io.ReadAll(httpResp.Body)
-			if errClose := httpResp.Body.Close(); errClose != nil {
+			data, errRead := io.ReadAll(decodedBody)
+			if errClose := decodedBody.Close(); errClose != nil {
 				log.Errorf("gemini cli executor: close response body error: %v", errClose)
 			}
 			if errRead != nil {
@@ -348,7 +360,7 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *provider.Au
 			return cloudcode.ResponseUnwrap(payload), false
 		}
 
-		streamChan = stream.RunSSEStream(ctx, httpResp.Body, reporter, processor, stream.StreamConfig{
+		streamChan = stream.RunSSEStream(ctx, decodedBody, reporter, processor, stream.StreamConfig{
 			ExecutorName:    "gemini-cli",
 			Preprocessor:    preprocessor,
 			EnsurePublished: true,
@@ -438,8 +450,13 @@ func (e *GeminiCLIExecutor) CountTokens(ctx context.Context, auth *provider.Auth
 			}
 			return provider.Response{}, errDo
 		}
-		data, errRead := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
+		decodedBody, errDecode := executor.DecodeResponseBody(resp.Body, resp.Header.Get("Content-Encoding"))
+		if errDecode != nil {
+			_ = resp.Body.Close()
+			return provider.Response{}, fmt.Errorf("failed to decode response body: %w", errDecode)
+		}
+		data, errRead := io.ReadAll(decodedBody)
+		_ = decodedBody.Close()
 		if errRead != nil {
 			return provider.Response{}, errRead
 		}

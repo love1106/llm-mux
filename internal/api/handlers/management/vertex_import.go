@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/nghyane/llm-mux/internal/auth/vertex"
+	log "github.com/nghyane/llm-mux/internal/logging"
 	"github.com/nghyane/llm-mux/internal/provider"
 	"github.com/nghyane/llm-mux/internal/util"
 )
@@ -106,6 +107,10 @@ func (h *Handler) ImportVertexCredential(c *gin.Context) {
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, ErrCodeWriteFailed, err.Error())
 		return
+	}
+
+	if regErr := h.registerAuthFromFile(ctx, savedPath, nil); regErr != nil {
+		log.WithError(regErr).WithField("path", savedPath).Warn("Failed to register auth in memory after vertex import")
 	}
 
 	respondOK(c, gin.H{

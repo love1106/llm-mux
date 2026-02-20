@@ -18,7 +18,7 @@ func GetClaudeModels() []*ModelInfo {
 		Claude("claude-opus-4-6-thinking-low").Display("Claude 4.6 Opus Thinking Low").Created(1739232000).Context(200000, 64000).Thinking(1024, 100000).B(),
 		Claude("claude-opus-4-6-thinking-medium").Display("Claude 4.6 Opus Thinking Medium").Created(1739232000).Context(200000, 64000).Thinking(1024, 100000).B(),
 		Claude("claude-opus-4-6-thinking-high").Display("Claude 4.6 Opus Thinking High").Created(1739232000).Context(200000, 64000).Thinking(1024, 100000).B(),
-		Claude("claude-opus-4-6-20260211").Display("Claude 4.6 Opus").Desc("Most intelligent Claude model with breakthrough reasoning capabilities").Created(1739232000).Canonical("claude-opus-4-6").Context(200000, 64000).B(),
+		Claude("claude-opus-4-6").Display("Claude 4.6 Opus").Desc("Most intelligent Claude model with breakthrough reasoning capabilities").Created(1739232000).Canonical("claude-opus-4-6").Context(200000, 64000).B(),
 		Claude("claude-opus-4-5-thinking").Display("Claude 4.5 Opus Thinking").Created(1761955200).Context(200000, 64000).Thinking(1024, 100000).B(),
 		Claude("claude-opus-4-5-thinking-low").Display("Claude 4.5 Opus Thinking Low").Created(1761955200).Context(200000, 64000).Thinking(1024, 100000).B(),
 		Claude("claude-opus-4-5-thinking-medium").Display("Claude 4.5 Opus Thinking Medium").Created(1761955200).Context(200000, 64000).Thinking(1024, 100000).B(),

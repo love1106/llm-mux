@@ -45,8 +45,8 @@ const providerColors: Record<string, string> = {
 
 const OAUTH_PROVIDERS = [
   { id: 'claude', name: 'Claude', description: 'Anthropic Claude Pro/Max', icon: '🟣', flowType: 'oauth', supportsManual: true },
-  { id: 'gemini', name: 'Gemini', description: 'Google Gemini CLI', icon: '🔵', flowType: 'oauth', supportsManual: false },
-  { id: 'antigravity', name: 'Antigravity', description: 'Google Cloud AI Companion', icon: '🌐', flowType: 'oauth', supportsManual: false },
+  { id: 'gemini', name: 'Gemini', description: 'Google Gemini CLI', icon: '🔵', flowType: 'oauth', supportsManual: true },
+  { id: 'antigravity', name: 'Antigravity', description: 'Google Cloud AI Companion', icon: '🌐', flowType: 'oauth', supportsManual: true },
   { id: 'copilot', name: 'GitHub Copilot', description: 'GitHub Copilot subscription', icon: '🐙', flowType: 'device', supportsManual: false },
   { id: 'qwen', name: 'Qwen', description: 'Alibaba Qwen', icon: '🟠', flowType: 'device', supportsManual: false },
   { id: 'codex', name: 'Codex', description: 'OpenAI Codex CLI', icon: '🟢', flowType: 'oauth', supportsManual: true },
@@ -709,14 +709,18 @@ export function AccountsPage() {
                         </div>
                         
                         <div className="space-y-2">
-                          <label className="text-sm font-medium">2. After login, copy the Authentication Code:</label>
+                          <label className="text-sm font-medium">2. After login, paste the code or redirect URL:</label>
                           <p className="text-xs text-muted-foreground">
-                            You'll see a page with "Authentication Code" - click "Copy Code" and paste it here.
+                            {selectedProvider === 'claude' || selectedProvider === 'codex'
+                              ? 'You\'ll see a page with "Authentication Code" - click "Copy Code" and paste it here.'
+                              : 'After authorizing, you\'ll be redirected to a page that won\'t load. Copy the full URL from your browser\'s address bar and paste it here.'}
                           </p>
                           <textarea
                             value={manualCode}
                             onChange={(e) => setManualCode(e.target.value)}
-                            placeholder="Paste the authentication code here..."
+                            placeholder={selectedProvider === 'claude' || selectedProvider === 'codex'
+                              ? 'Paste the authentication code here...'
+                              : 'Paste the redirect URL or code here (e.g. http://localhost:8085/oauth2callback?code=...)'}
                             className="w-full h-20 p-2 rounded-md border bg-muted font-mono text-xs resize-none focus:outline-none focus:ring-2 focus:ring-primary"
                           />
                         </div>

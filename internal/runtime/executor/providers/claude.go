@@ -431,8 +431,8 @@ func (e *ClaudeExecutor) resolveUpstreamModel(alias string, auth *provider.Auth)
 		return ""
 	}
 	switch alias {
-	case "claude-opus-4-6", "claude-opus-4-6-thinking", "claude-opus-4-6-thinking-low", "claude-opus-4-6-thinking-medium", "claude-opus-4-6-thinking-high":
-		return "claude-opus-4-6-20260211"
+	case "claude-opus-4-6-thinking", "claude-opus-4-6-thinking-low", "claude-opus-4-6-thinking-medium", "claude-opus-4-6-thinking-high":
+		return "claude-opus-4-6"
 	case "claude-opus-4-5", "claude-opus-4-5-thinking", "claude-opus-4-5-thinking-low", "claude-opus-4-5-thinking-medium", "claude-opus-4-5-thinking-high":
 		return "claude-opus-4-5-20251101"
 	case "claude-sonnet-4-5", "claude-sonnet-4-5-thinking":
