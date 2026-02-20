@@ -280,7 +280,7 @@ func (r *RoutingConfig) HasProviderPriority() bool {
 // NewDefaultConfig creates a new Config with sensible defaults.
 // This allows the server to run without a config file using OAuth credentials only.
 func NewDefaultConfig() *Config {
-	return &Config{
+	cfg := &Config{
 		Port:                   8317,
 		AuthDir:                "$XDG_CONFIG_HOME/llm-mux/auth",
 		DisableAuth:            true,
@@ -304,7 +304,12 @@ func NewDefaultConfig() *Config {
 		AmpCode: AmpCode{
 			RestrictManagementToLocalhost: true,
 		},
+		Routing: RoutingConfig{
+			Fallbacks: map[string][]string{},
+		},
 	}
+	cfg.Routing.Init()
+	return cfg
 }
 
 // GenerateDefaultConfigYAML generates a minimal default config YAML from NewDefaultConfig().

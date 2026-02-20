@@ -16,6 +16,7 @@ var modelPricing = map[string]ModelPricing{
 	"claude-opus-4-6-20260211":     {InputPer1M: 15.00, OutputPer1M: 75.00, CachedPer1M: 1.50},
 	"claude-sonnet-4-20250514":     {InputPer1M: 3.00, OutputPer1M: 15.00, CachedPer1M: 0.30},
 	"claude-sonnet-4-5-20250929":   {InputPer1M: 3.00, OutputPer1M: 15.00, CachedPer1M: 0.30},
+	"claude-sonnet-4-6":            {InputPer1M: 3.00, OutputPer1M: 15.00, CachedPer1M: 0.30},
 	"gpt-4o":                       {InputPer1M: 2.50, OutputPer1M: 10.00, CachedPer1M: 1.25},
 	"gpt-4o-mini":                  {InputPer1M: 0.15, OutputPer1M: 0.60, CachedPer1M: 0.075},
 	"gpt-4-turbo":                  {InputPer1M: 10.00, OutputPer1M: 30.00},

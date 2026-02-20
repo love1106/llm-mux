@@ -437,6 +437,8 @@ func (e *ClaudeExecutor) resolveUpstreamModel(alias string, auth *provider.Auth)
 		return "claude-opus-4-5-20251101"
 	case "claude-sonnet-4-5", "claude-sonnet-4-5-thinking":
 		return "claude-sonnet-4-5-20250929"
+	case "claude-sonnet-4-6-thinking", "claude-sonnet-4-6-thinking-low", "claude-sonnet-4-6-thinking-medium", "claude-sonnet-4-6-thinking-high":
+		return "claude-sonnet-4-6"
 	case "claude-opus-4-1":
 		return "claude-opus-4-1-20250805"
 	case "claude-opus-4":
