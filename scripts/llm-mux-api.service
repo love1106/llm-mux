@@ -1,0 +1,17 @@
+[Unit]
+Description=LLM-Mux API Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/workspace/llm-mux
+ExecStart=/workspace/llm-mux/llm-mux serve
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=llm-mux-api
+
+[Install]
+WantedBy=default.target

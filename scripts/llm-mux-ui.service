@@ -1,0 +1,18 @@
+[Unit]
+Description=LLM-Mux Web UI (Vite Dev)
+After=network-online.target llm-mux-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/workspace/llm-mux/ui
+ExecStart=/usr/bin/npm run dev -- --host 0.0.0.0
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=llm-mux-ui
+Environment=PATH=/usr/bin:/usr/local/bin
+
+[Install]
+WantedBy=default.target
