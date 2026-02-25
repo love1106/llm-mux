@@ -64,6 +64,7 @@ func GetOpenAIModels() []*ModelInfo {
 		OpenAI("gpt-5.1-codex-max-medium").Display("GPT 5 Codex Max Medium").Desc("Stable version of GPT 5 Codex Max Medium").Created(1763424000).Version("gpt-5.1-max").B(),
 		OpenAI("gpt-5.1-codex-max-high").Display("GPT 5 Codex Max High").Desc("Stable version of GPT 5 Codex Max High").Created(1763424000).Version("gpt-5.1-max").B(),
 		OpenAI("gpt-5.1-codex-max-xhigh").Display("GPT 5 Codex Max XHigh").Desc("Stable version of GPT 5 Codex Max XHigh").Created(1763424000).Version("gpt-5.1-max").B(),
+		OpenAI("gpt-5.2").Display("GPT 5.2").Desc("Latest GPT 5.2 model for coding and agentic tasks.").Created(1763424000).Version("gpt-5.2").B(),
 	}
 }
 

@@ -162,8 +162,22 @@ func convertToResponsesAPIRequest(req *ir.UnifiedChatRequest) ([]byte, error) {
 	if req.MaxTokens != nil {
 		m["max_output_tokens"] = *req.MaxTokens
 	}
-	if req.Instructions != "" {
-		m["instructions"] = req.Instructions
+	// If Instructions is not set, promote the first system message to instructions.
+	// The Responses API requires the `instructions` field; system-role messages in
+	// `input` are not accepted by all providers (e.g. OpenAI Codex).
+	instructions := req.Instructions
+	if instructions == "" {
+		for _, msg := range req.Messages {
+			if msg.Role == ir.RoleSystem {
+				if t := ir.CombineTextParts(msg); t != "" {
+					instructions = t
+					break
+				}
+			}
+		}
+	}
+	if instructions != "" {
+		m["instructions"] = instructions
 	}
 	if req.AudioConfig != nil {
 		ac := map[string]any{}
@@ -183,7 +197,7 @@ func convertToResponsesAPIRequest(req *ir.UnifiedChatRequest) ([]byte, error) {
 
 	var input []any
 	for _, msg := range req.Messages {
-		if msg.Role == ir.RoleSystem && req.Instructions != "" {
+		if msg.Role == ir.RoleSystem && instructions != "" {
 			continue
 		}
 		if item := convertMessageToResponsesInput(msg); item != nil {

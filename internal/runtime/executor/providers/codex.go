@@ -60,6 +60,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *provider.Auth, req pr
 
 	body, _ = sjson.SetBytes(body, "stream", true)
 	body, _ = sjson.DeleteBytes(body, "previous_response_id")
+	body, _ = sjson.SetBytes(body, "store", false)
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
 	httpReq, err := e.cacheHelper(ctx, from, url, req, body)
@@ -138,6 +139,8 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *provider.Auth, 
 	body = e.setReasoningEffortByAlias(req.Model, body)
 	body = e.ApplyPayloadConfig(req.Model, body)
 	body, _ = sjson.DeleteBytes(body, "previous_response_id")
+	body, _ = sjson.SetBytes(body, "store", false)
+	body, _ = sjson.SetBytes(body, "stream", true)
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
 	httpReq, err := e.cacheHelper(ctx, from, url, req, body)
