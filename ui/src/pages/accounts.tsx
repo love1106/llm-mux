@@ -23,6 +23,7 @@ import {
   Check,
   Upload,
   Play,
+  Power,
 } from 'lucide-react'
 
 const CLAUDE_DAILY_LIMIT = 45_000_000
@@ -109,6 +110,15 @@ export function AccountsPage() {
       toast.success('Token refresh triggered')
     },
     onError: () => toast.error('Failed to refresh token'),
+  })
+
+  const toggleMutation = useMutation({
+    mutationFn: ({ id, disabled }: { id: string; disabled: boolean }) => managementApi.toggleAuthFile(id, disabled),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['auth-files'] })
+      toast.success(variables.disabled ? 'Account disabled' : 'Account enabled')
+    },
+    onError: () => toast.error('Failed to toggle account'),
   })
 
   const resetOauthState = () => {
@@ -494,6 +504,15 @@ export function AccountsPage() {
                         title="Test account"
                       >
                         <Play className="h-4 w-4 text-green-500" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => toggleMutation.mutate({ id: account.id || account.name, disabled: !account.disabled })}
+                        disabled={toggleMutation.isPending}
+                        title={account.disabled ? 'Enable account' : 'Disable account'}
+                      >
+                        <Power className={`h-4 w-4 ${account.disabled ? 'text-gray-400' : 'text-emerald-500'}`} />
                       </Button>
                       <Button
                         variant="ghost"

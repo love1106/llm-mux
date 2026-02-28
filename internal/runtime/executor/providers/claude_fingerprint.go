@@ -17,42 +17,46 @@ type claudeFingerprint struct {
 	Arch           string // X-Stainless-Arch
 }
 
-// defaultClaudeFingerprints contains realistic Claude CLI client fingerprints
-// representing different environments. Each account is assigned one
-// deterministically based on its ID so the same account always presents
-// the same identity.
+// defaultClaudeFingerprints contains realistic Claude Code client fingerprints
+// matching the Anthropic Node.js SDK header format used by Claude Code 2.x.
+// Claude Code overrides the SDK's default User-Agent with its own format:
+//   claude-code/{version}
+// The X-Stainless-Package-Version reflects the SDK version bundled inside
+// Claude Code, not the standalone npm release.
+// Each account is assigned one deterministically based on its ID so the same
+// account always presents the same identity.
 var defaultClaudeFingerprints = []claudeFingerprint{
 	{
-		UserAgent:      "claude-cli/1.0.83 (external, cli)",
-		PackageVersion: "0.55.1",
-		RuntimeVersion: "v24.3.0",
+		UserAgent:      "claude-code/2.1.62",
+		PackageVersion: "0.74.0",
+		RuntimeVersion: "v22.13.0",
 		OS:             "MacOS",
 		Arch:           "arm64",
 	},
 	{
-		UserAgent:      "claude-cli/1.0.83 (external, cli)",
-		PackageVersion: "0.55.1",
-		RuntimeVersion: "v22.12.0",
+		UserAgent:      "claude-code/2.1.62",
+		PackageVersion: "0.74.0",
+		RuntimeVersion: "v20.19.5",
 		OS:             "Linux",
 		Arch:           "x64",
 	},
 	{
-		UserAgent:      "claude-cli/1.0.82 (external, cli)",
-		PackageVersion: "0.54.2",
-		RuntimeVersion: "v22.17.0",
+		UserAgent:      "claude-code/2.1.37",
+		PackageVersion: "0.70.0",
+		RuntimeVersion: "v22.12.0",
 		OS:             "MacOS",
 		Arch:           "x64",
 	},
 	{
-		UserAgent:      "claude-cli/1.0.80 (external, cli)",
-		PackageVersion: "0.53.0",
-		RuntimeVersion: "v20.18.0",
+		UserAgent:      "claude-code/2.1.37",
+		PackageVersion: "0.70.0",
+		RuntimeVersion: "v20.18.3",
 		OS:             "Windows",
 		Arch:           "x64",
 	},
 	{
-		UserAgent:      "claude-cli/1.0.83 (external, cli)",
-		PackageVersion: "0.55.1",
+		UserAgent:      "claude-code/2.1.62",
+		PackageVersion: "0.74.0",
 		RuntimeVersion: "v22.11.0",
 		OS:             "Linux",
 		Arch:           "arm64",

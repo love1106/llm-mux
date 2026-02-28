@@ -97,6 +97,7 @@ export const managementApi = {
   deleteAuthFile: (name: string) => api.delete('/auth-files', { params: { name } }),
   refreshAuthFile: (id: string) => api.post<ApiResponse<{ status: string; message: string }>>('/auth-files/refresh', null, { params: { id } }),
   importRawJSON: (jsonData: string) => api.post<ApiResponse<{ status: string; filename: string }>>('/auth-files/import', jsonData, { headers: { 'Content-Type': 'application/json' } }),
+  toggleAuthFile: (id: string, disabled: boolean) => api.patch<ApiResponse<{ status: string; disabled: boolean }>>('/auth-files/toggle', { disabled }, { params: { id } }),
 
   getUsage: (params?: { days?: number; from?: string; to?: string }) =>
     api.get<ApiResponse<UsageStats>>('/usage', { params }),

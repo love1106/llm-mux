@@ -280,14 +280,11 @@ func (m *Manager) Load(ctx context.Context) error {
 // Execute performs a non-streaming execution using the configured selector and executor.
 // It supports multiple providers for the same model with weighted selection based on performance.
 func (m *Manager) Execute(ctx context.Context, providers []string, req Request, opts Options) (Response, error) {
-	log.Infof("Execute: providers=%v, model=%s", providers, req.Model)
 	normalized := m.normalizeProviders(providers)
-	log.Infof("Execute: normalized=%v", normalized)
 	if len(normalized) == 0 {
 		return Response{}, &Error{Code: "provider_not_found", Message: "no provider supplied"}
 	}
 	selected := m.selectProviders(req.Model, normalized)
-	log.Infof("Execute: selected=%v", selected)
 
 	retryTimes, maxWait := m.retrySettings()
 	attempts := retryTimes + 1
@@ -476,6 +473,19 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 				qm.RecordQuotaHit(result.AuthID, result.Provider, result.Model, result.RetryAfter)
 			}
 		}
+		// Circuit breaker: sync disabled state from registry back to m.auths.
+		// The registry may have disabled the auth on 401/403; keep m.auths consistent.
+		if entry := m.registry.GetEntry(result.AuthID); entry != nil && entry.IsDisabled() {
+			m.mu.Lock()
+			if auth, ok := m.auths[result.AuthID]; ok && auth != nil {
+				auth.Disabled = true
+				auth.Status = StatusDisabled
+				meta := entry.Metadata()
+				auth.StatusMessage = meta.StatusMessage
+				auth.UpdatedAt = meta.UpdatedAt
+			}
+			m.mu.Unlock()
+		}
 		return
 	}
 	// Fallback to sync processing when registry is not available (legacy mode)
@@ -604,8 +614,20 @@ func (m *Manager) markResultSync(ctx context.Context, result Result) {
 					state.NextRetryAfter = now.Add(30 * time.Second)
 				}
 
-				// Only update auth-level status for non-user errors
-				if category != CategoryUserError && category != CategoryClientCanceled {
+				// Circuit breaker: auto-disable auth on critical upstream errors.
+				// 401/403 indicate account-level issues (revoked token, subscription expired)
+				// that affect ALL models — disable the entire auth to prevent further routing.
+				// Check raw status code because CategorizeHTTPStatus maps 403 to CategoryQuotaError,
+				// but for the circuit breaker 403 is always an account-level problem.
+				if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden ||
+					category == CategoryAuthRevoked {
+					auth.Disabled = true
+					auth.Status = StatusDisabled
+					auth.StatusMessage = fmt.Sprintf("auto-disabled: upstream HTTP %d", statusCode)
+					log.Warnf("circuit breaker: auto-disabled auth %s (provider=%s): HTTP %d: %s",
+						auth.ID, result.Provider, statusCode, errMsg)
+				} else if category != CategoryUserError && category != CategoryClientCanceled {
+					// Only update auth-level status for non-user errors
 					auth.Status = StatusError
 				}
 				auth.UpdatedAt = now
@@ -667,19 +689,23 @@ func (m *Manager) List() []*Auth {
 	return list
 }
 
-// GetByID retrieves an auth entry by its ID.
-
+// GetByID retrieves an auth entry by its ID or FileName.
 func (m *Manager) GetByID(id string) (*Auth, bool) {
 	if id == "" {
 		return nil, false
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	auth, ok := m.auths[id]
-	if !ok {
-		return nil, false
+	if auth, ok := m.auths[id]; ok {
+		return auth.Clone(), true
 	}
-	return auth.Clone(), true
+	// Fallback: search by FileName for file-based auth entries
+	for _, a := range m.auths {
+		if a.FileName == id {
+			return a.Clone(), true
+		}
+	}
+	return nil, false
 }
 
 func (m *Manager) pickNext(ctx context.Context, provider, model string, opts Options, tried map[string]struct{}) (*Auth, ProviderExecutor, error) {
@@ -748,7 +774,6 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts Opt
 }
 
 func (m *Manager) pickNextFromRegistry(ctx context.Context, provider, model string, opts Options, tried map[string]struct{}) (*Auth, ProviderExecutor, error) {
-	log.Infof("pickNextFromRegistry: provider=%s, model=%s, registry=%v", provider, model, m.registry != nil)
 	if m.registry == nil {
 		return m.pickNext(ctx, provider, model, opts, tried)
 	}
@@ -756,7 +781,6 @@ func (m *Manager) pickNextFromRegistry(ctx context.Context, provider, model stri
 	m.mu.RLock()
 	executor, okExecutor := m.executors[provider]
 	m.mu.RUnlock()
-	log.Infof("pickNextFromRegistry: executor found=%v for provider=%s", okExecutor, provider)
 	if !okExecutor {
 		return nil, nil, &Error{Code: "executor_not_found", Message: "executor not registered"}
 	}
@@ -767,30 +791,22 @@ func (m *Manager) pickNextFromRegistry(ctx context.Context, provider, model stri
 	}
 
 	allEntries := m.registry.ListByProvider(provider)
-	log.Infof("pickNextFromRegistry: ListByProvider(%s) returned %d entries", provider, len(allEntries))
-	for i, e := range allEntries {
-		log.Infof("pickNextFromRegistry: entry[%d] id=%s provider=%s disabled=%v", i, e.ID(), e.Provider(), e.IsDisabled())
-	}
 
 	var entries []*AuthEntry
 	registryRef := registry.GetGlobalRegistry()
 	for _, entry := range allEntries {
 		if entry.IsDisabled() {
-			log.Infof("pickNextFromRegistry: entry %s is disabled, skipping", entry.ID())
 			continue
 		}
 		if _, used := tried[entry.ID()]; used {
-			log.Infof("pickNextFromRegistry: entry %s already tried, skipping", entry.ID())
 			continue
 		}
 		if modelKey != "" && registryRef != nil && !registryRef.ClientSupportsModel(entry.ID(), modelKey) {
-			log.Infof("pickNextFromRegistry: entry %s does not support model %s, skipping", entry.ID(), modelKey)
 			continue
 		}
 		entries = append(entries, entry)
 	}
 
-	log.Infof("pickNextFromRegistry: after filtering, %d entries available", len(entries))
 	if len(entries) == 0 {
 		return nil, nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
@@ -803,7 +819,6 @@ func (m *Manager) pickNextFromRegistry(ctx context.Context, provider, model stri
 		return nil, nil, &Error{Code: "auth_not_found", Message: "selector returned no auth"}
 	}
 
-	log.Infof("pickNextFromRegistry: SELECTED auth=%s for provider=%s model=%s", selected.ID(), provider, model)
 	return selected.ToAuth(), executor, nil
 }
 

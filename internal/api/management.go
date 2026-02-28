@@ -80,6 +80,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.POST("/auth-files/refresh", s.mgmt.RefreshAuthFile)
 		mgmt.POST("/auth-files/import", s.mgmt.ImportRawJSON)
 		mgmt.DELETE("/auth-files", s.mgmt.DeleteAuthFile)
+		mgmt.PATCH("/auth-files/toggle", s.mgmt.ToggleAuthFile)
 		mgmt.POST("/vertex/import", s.mgmt.ImportVertexCredential)
 
 		// Unified OAuth API endpoints

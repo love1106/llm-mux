@@ -1,7 +1,11 @@
 package provider
 
 import (
+	"fmt"
+	"net/http"
 	"time"
+
+	log "github.com/nghyane/llm-mux/internal/logging"
 )
 
 // ensureModelState creates a model state if it doesn't exist.
@@ -150,12 +154,12 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 	}
 
 	// Use category-based decision making
+	statusCode := statusCodeFromResult(resultErr)
 	category := CategoryUnknown
 	if resultErr != nil && resultErr.ErrCategory != CategoryUnknown {
 		category = resultErr.ErrCategory
 	} else {
 		// Fallback to status code + message classification
-		statusCode := statusCodeFromResult(resultErr)
 		msg := ""
 		if resultErr != nil {
 			msg = resultErr.Message
@@ -169,26 +173,40 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 		auth.StatusMessage = "oauth_token_revoked"
 		auth.Disabled = true
 		auth.Status = StatusDisabled
+		log.Warnf("circuit breaker: auto-disabled auth %s (provider=%s): oauth token revoked",
+			auth.ID, auth.Provider)
 	case CategoryAuthError:
-		// Temporary auth error - retry later
-		auth.StatusMessage = "unauthorized"
-		auth.NextRetryAfter = now.Add(30 * time.Minute)
+		// Auth error (401) - disable auth to prevent further routing.
+		auth.StatusMessage = fmt.Sprintf("auto-disabled: upstream HTTP %d", statusCode)
+		auth.Disabled = true
+		auth.Status = StatusDisabled
+		log.Warnf("circuit breaker: auto-disabled auth %s (provider=%s): HTTP %d: %s",
+			auth.ID, auth.Provider, statusCode, auth.StatusMessage)
 	case CategoryQuotaError:
-		auth.StatusMessage = "quota exhausted"
-		auth.Quota.Exceeded = true
-		auth.Quota.Reason = "quota"
-		var next time.Time
-		if retryAfter != nil {
-			next = now.Add(*retryAfter)
+		// Circuit breaker: 403 is categorized as quota but is an account-level issue.
+		if statusCode == http.StatusForbidden {
+			auth.StatusMessage = fmt.Sprintf("auto-disabled: upstream HTTP %d", statusCode)
+			auth.Disabled = true
+			auth.Status = StatusDisabled
+			log.Warnf("circuit breaker: auto-disabled auth %s (provider=%s): HTTP %d: %s",
+				auth.ID, auth.Provider, statusCode, auth.StatusMessage)
 		} else {
-			cooldown, nextLevel := nextQuotaCooldown(auth.Quota.BackoffLevel)
-			if cooldown > 0 {
-				next = now.Add(cooldown)
+			auth.StatusMessage = "quota exhausted"
+			auth.Quota.Exceeded = true
+			auth.Quota.Reason = "quota"
+			var next time.Time
+			if retryAfter != nil {
+				next = now.Add(*retryAfter)
+			} else {
+				cooldown, nextLevel := nextQuotaCooldown(auth.Quota.BackoffLevel)
+				if cooldown > 0 {
+					next = now.Add(cooldown)
+				}
+				auth.Quota.BackoffLevel = nextLevel
 			}
-			auth.Quota.BackoffLevel = nextLevel
+			auth.Quota.NextRecoverAt = next
+			auth.NextRetryAfter = next
 		}
-		auth.Quota.NextRecoverAt = next
-		auth.NextRetryAfter = next
 	case CategoryNotFound:
 		auth.StatusMessage = "not_found"
 		auth.NextRetryAfter = now.Add(12 * time.Hour)

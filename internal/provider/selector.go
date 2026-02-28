@@ -55,6 +55,7 @@ type modelCooldownError struct {
 	model    string
 	resetIn  time.Duration
 	provider string
+	reason   string // upstream error that triggered the cooldown
 }
 
 func newModelCooldownError(model, provider string, resetIn time.Duration) *modelCooldownError {
@@ -66,6 +67,12 @@ func newModelCooldownError(model, provider string, resetIn time.Duration) *model
 		provider: provider,
 		resetIn:  resetIn,
 	}
+}
+
+func newModelCooldownErrorWithReason(model, provider string, resetIn time.Duration, reason string) *modelCooldownError {
+	e := newModelCooldownError(model, provider, resetIn)
+	e.reason = reason
+	return e
 }
 
 func (e *modelCooldownError) Error() string {
@@ -96,6 +103,9 @@ func (e *modelCooldownError) Error() string {
 	}
 	if e.provider != "" {
 		errorBody["provider"] = e.provider
+	}
+	if e.reason != "" {
+		errorBody["reason"] = e.reason
 	}
 	payload := map[string]any{"error": errorBody}
 	data, err := json.Marshal(payload)
@@ -141,6 +151,7 @@ func (s *RoundRobinSelector) Pick(ctx context.Context, provider, model string, o
 	now := time.Now()
 	cooldownCount := 0
 	var earliest time.Time
+	var lastReason string
 	for i := 0; i < len(auths); i++ {
 		candidate := auths[i]
 		blocked, reason, next := isAuthBlockedForModel(candidate, model, now)
@@ -151,6 +162,7 @@ func (s *RoundRobinSelector) Pick(ctx context.Context, provider, model string, o
 		if reason == blockReasonCooldown || reason == blockReasonOther {
 			if !next.IsZero() && (earliest.IsZero() || next.Before(earliest)) {
 				earliest = next
+				lastReason = extractAuthCooldownReason(candidate, model)
 			}
 		}
 		if reason == blockReasonCooldown {
@@ -163,7 +175,7 @@ func (s *RoundRobinSelector) Pick(ctx context.Context, provider, model string, o
 			if resetIn < 0 {
 				resetIn = 0
 			}
-			return nil, newModelCooldownError(model, provider, resetIn)
+			return nil, newModelCooldownErrorWithReason(model, provider, resetIn, lastReason)
 		}
 		return nil, &Error{Code: "auth_unavailable", Message: "no auth available"}
 	}
@@ -262,4 +274,29 @@ func isAuthBlockedForModel(auth *Auth, model string, now time.Time) (bool, block
 		return true, blockReasonOther, next
 	}
 	return false, blockReasonNone, time.Time{}
+}
+
+// extractAuthCooldownReason returns a human-readable reason for why an auth is in
+// cooldown, derived from model-level state or auth-level error info.
+func extractAuthCooldownReason(auth *Auth, model string) string {
+	if auth == nil {
+		return ""
+	}
+	if model != "" && len(auth.ModelStates) > 0 {
+		if state, ok := auth.ModelStates[model]; ok && state != nil {
+			if state.LastError != nil && state.LastError.Message != "" {
+				return state.LastError.Message
+			}
+			if state.StatusMessage != "" {
+				return state.StatusMessage
+			}
+		}
+	}
+	if auth.LastError != nil && auth.LastError.Message != "" {
+		return auth.LastError.Message
+	}
+	if auth.StatusMessage != "" {
+		return auth.StatusMessage
+	}
+	return ""
 }

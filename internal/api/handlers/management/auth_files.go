@@ -746,6 +746,50 @@ func (h *Handler) disableAuth(ctx context.Context, id string) {
 	}
 }
 
+// ToggleAuthFile enables or disables an auth entry without deleting it.
+// When disabled, the auth will not be used for routing requests.
+func (h *Handler) ToggleAuthFile(c *gin.Context) {
+	if h.authManager == nil {
+		respondError(c, http.StatusServiceUnavailable, ErrCodeInternalError, "core auth manager unavailable")
+		return
+	}
+	ctx := c.Request.Context()
+	id := c.Query("id")
+	if id == "" {
+		id = c.Query("name")
+	}
+	if id == "" {
+		respondBadRequest(c, "id or name is required")
+		return
+	}
+	var body struct {
+		Disabled *bool `json:"disabled"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.Disabled == nil {
+		respondBadRequest(c, "invalid body: expected {\"disabled\": bool}")
+		return
+	}
+	auth, ok := h.authManager.GetByID(id)
+	if !ok {
+		respondNotFound(c, "auth not found")
+		return
+	}
+	auth.Disabled = *body.Disabled
+	if *body.Disabled {
+		auth.Status = provider.StatusDisabled
+		auth.StatusMessage = "disabled via management API"
+	} else {
+		auth.Status = provider.StatusActive
+		auth.StatusMessage = ""
+	}
+	auth.UpdatedAt = time.Now()
+	if _, err := h.authManager.Update(ctx, auth); err != nil {
+		respondInternalError(c, fmt.Sprintf("failed to update auth: %v", err))
+		return
+	}
+	respondOK(c, gin.H{"status": "ok", "disabled": *body.Disabled})
+}
+
 func (h *Handler) deleteTokenRecord(ctx context.Context, path string) error {
 	if strings.TrimSpace(path) == "" {
 		return fmt.Errorf("auth path is empty")

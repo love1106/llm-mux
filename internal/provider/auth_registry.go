@@ -2,6 +2,8 @@ package provider
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -310,19 +312,15 @@ func (r *AuthRegistry) ListEntries() []*AuthEntry {
 
 func (r *AuthRegistry) ListByProvider(provider string) []*AuthEntry {
 	var result []*AuthEntry
-	total := 0
 	for _, shard := range r.shards {
 		shard.mu.RLock()
 		for _, entry := range shard.entries {
-			total++
-			log.Infof("ListByProvider: checking entry id=%s, provider=%s, looking for=%s", entry.ID(), entry.Provider(), provider)
 			if entry.Provider() == provider {
 				result = append(result, entry)
 			}
 		}
 		shard.mu.RUnlock()
 	}
-	log.Infof("ListByProvider: total entries=%d, matched=%d for provider=%s", total, len(result), provider)
 	return result
 }
 
@@ -688,18 +686,38 @@ func (r *AuthRegistry) handleFailureResult(ctx context.Context, entry *AuthEntry
 			}
 			newMeta.StatusMessage = result.Error.Message
 		}
+		// Circuit breaker: auto-disable auth on 401/403.
+		if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden ||
+			category == CategoryAuthRevoked {
+			newMeta.Status = StatusDisabled
+			newMeta.StatusMessage = fmt.Sprintf("auto-disabled: upstream HTTP %d", statusCode)
+		}
 		return newMeta
 	})
+
+	// Circuit breaker: set disabled flag on the entry for 401/403.
+	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden ||
+		category == CategoryAuthRevoked {
+		entry.SetDisabled(true)
+		log.Warnf("circuit breaker: auto-disabled auth %s (provider=%s): HTTP %d: %s",
+			entry.ID(), result.Provider, statusCode, errMsg)
+	}
 }
 
 func (r *AuthRegistry) applyAuthLevelFailure(entry *AuthEntry, result Result, now time.Time) {
 	entry.SetUnavailable(true)
 
+	statusCode := 0
+	errMsg := ""
 	category := CategoryUnknown
-	if result.Error != nil && result.Error.ErrCategory != CategoryUnknown {
-		category = result.Error.ErrCategory
-	} else if result.Error != nil {
-		category = CategorizeError(result.Error.StatusCode(), result.Error.Message)
+	if result.Error != nil {
+		statusCode = result.Error.StatusCode()
+		errMsg = result.Error.Message
+		if result.Error.ErrCategory != CategoryUnknown {
+			category = result.Error.ErrCategory
+		} else {
+			category = CategorizeError(statusCode, errMsg)
+		}
 	}
 
 	entry.UpdateMetadata(func(old *AuthMetadata) *AuthMetadata {
@@ -723,19 +741,25 @@ func (r *AuthRegistry) applyAuthLevelFailure(entry *AuthEntry, result Result, no
 			newMeta.Status = StatusDisabled
 		case CategoryAuthError:
 			newMeta.StatusMessage = "unauthorized"
-			newMeta.NextRetryAfter = now.Add(30 * time.Minute)
+			newMeta.Status = StatusDisabled
 		case CategoryQuotaError:
-			newMeta.StatusMessage = "quota exhausted"
-			var next time.Time
-			if result.RetryAfter != nil {
-				next = now.Add(*result.RetryAfter)
+			// Circuit breaker: 403 is categorized as quota but is an account-level issue.
+			if statusCode == http.StatusForbidden {
+				newMeta.StatusMessage = fmt.Sprintf("auto-disabled: upstream HTTP %d", statusCode)
+				newMeta.Status = StatusDisabled
 			} else {
-				cooldown, _ := nextQuotaCooldown(0)
-				if cooldown > 0 {
-					next = now.Add(cooldown)
+				newMeta.StatusMessage = "quota exhausted"
+				var next time.Time
+				if result.RetryAfter != nil {
+					next = now.Add(*result.RetryAfter)
+				} else {
+					cooldown, _ := nextQuotaCooldown(0)
+					if cooldown > 0 {
+						next = now.Add(cooldown)
+					}
 				}
+				newMeta.NextRetryAfter = next
 			}
-			newMeta.NextRetryAfter = next
 		case CategoryNotFound:
 			newMeta.StatusMessage = "not_found"
 			newMeta.NextRetryAfter = now.Add(12 * time.Hour)
@@ -754,8 +778,12 @@ func (r *AuthRegistry) applyAuthLevelFailure(entry *AuthEntry, result Result, no
 		return newMeta
 	})
 
-	if category == CategoryAuthRevoked {
+	// Circuit breaker: disable auth entry on 401/403 or revoked tokens.
+	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden ||
+		category == CategoryAuthRevoked {
 		entry.SetDisabled(true)
+		log.Warnf("circuit breaker: auto-disabled auth %s (provider=%s): HTTP %d: %s",
+			entry.ID(), result.Provider, statusCode, errMsg)
 	}
 
 	if category == CategoryQuotaError {
@@ -779,6 +807,7 @@ func (r *AuthRegistry) Pick(ctx context.Context, provider, model string, opts Op
 	available := make([]*AuthEntry, 0, len(auths))
 
 	var earliest time.Time
+	var lastReason string
 	cooldownCount := 0
 
 	for _, entry := range auths {
@@ -791,6 +820,9 @@ func (r *AuthRegistry) Pick(ctx context.Context, provider, model string, opts Op
 			cd := entry.Quota.GetCooldownUntil()
 			if earliest.IsZero() || cd.Before(earliest) {
 				earliest = cd
+				if r := extractEntryCooldownReason(entry, model); r != "" {
+					lastReason = r
+				}
 			}
 			continue
 		}
@@ -800,6 +832,9 @@ func (r *AuthRegistry) Pick(ctx context.Context, provider, model string, opts Op
 			if reason == blockReasonCooldown || reason == blockReasonOther {
 				if !retryAt.IsZero() && (earliest.IsZero() || retryAt.Before(earliest)) {
 					earliest = retryAt
+					if r := extractEntryCooldownReason(entry, model); r != "" {
+						lastReason = r
+					}
 				}
 			}
 			if reason == blockReasonCooldown {
@@ -817,7 +852,7 @@ func (r *AuthRegistry) Pick(ctx context.Context, provider, model string, opts Op
 			if resetIn < 0 {
 				resetIn = 0
 			}
-			return nil, newModelCooldownError(model, provider, resetIn)
+			return nil, newModelCooldownErrorWithReason(model, provider, resetIn, lastReason)
 		}
 		return nil, &Error{Code: "auth_unavailable", Message: "no auth available"}
 	}
@@ -870,4 +905,34 @@ func (r *AuthRegistry) PickFromIDs(ctx context.Context, provider, model string, 
 		}
 	}
 	return r.Pick(ctx, provider, model, opts, entries)
+}
+
+// extractEntryCooldownReason gets the upstream error reason from an AuthEntry's
+// model-level or auth-level state, so cooldown errors can surface the real cause.
+func extractEntryCooldownReason(entry *AuthEntry, model string) string {
+	if entry == nil {
+		return ""
+	}
+	if model != "" {
+		if states := entry.ModelStates(); states != nil {
+			if snap, ok := states.Get(model); ok {
+				if snap.LastError != nil && snap.LastError.Message != "" {
+					return snap.LastError.Message
+				}
+				if snap.StatusMessage != "" {
+					return snap.StatusMessage
+				}
+			}
+		}
+	}
+	meta := entry.Metadata()
+	if meta != nil {
+		if meta.LastError != nil && meta.LastError.Message != "" {
+			return meta.LastError.Message
+		}
+		if meta.StatusMessage != "" {
+			return meta.StatusMessage
+		}
+	}
+	return ""
 }
