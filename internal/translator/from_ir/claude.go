@@ -64,12 +64,33 @@ func (p *ClaudeProvider) ConvertRequest(req *ir.UnifiedChatRequest) ([]byte, err
 		}
 	}
 
+	// Auto-inject cache_control for system prompt to enable Anthropic prompt caching.
+	// This adds "cache_control": {"type": "ephemeral"} to the system message,
+	// which tells Claude to cache the system prompt across requests.
+	// If the client already provides cache_control, we respect that instead.
+	autoCache := &ir.CacheControl{Type: "ephemeral"}
+
 	var msgs []any
 	for _, m := range req.Messages {
 		switch m.Role {
 		case ir.RoleSystem:
 			if text := ir.CombineTextParts(m); text != "" {
-				root["system"] = text
+				// Use structured system with cache_control for prompt caching
+				cc := autoCache
+				if m.CacheControl != nil {
+					cc = m.CacheControl
+				}
+				cacheObj := map[string]any{"type": cc.Type}
+				if cc.TTL != nil {
+					cacheObj["ttl"] = *cc.TTL
+				}
+				root["system"] = []map[string]any{
+					{
+						"type":          "text",
+						"text":          text,
+						"cache_control": cacheObj,
+					},
+				}
 			}
 		case ir.RoleUser:
 			if ps := ir.BuildClaudeContentParts(m, false, false); len(ps) > 0 {
@@ -146,6 +167,18 @@ func (p *ClaudeProvider) ConvertRequest(req *ir.UnifiedChatRequest) ([]byte, err
 			}
 		}
 	}
+	// Auto-inject cache_control on the second-to-last message (conversation prefix cache breakpoint).
+	// This enables Anthropic to cache the conversation history up to the latest exchange,
+	// so only the newest user message is uncached on each request.
+	if len(msgs) >= 2 {
+		target := msgs[len(msgs)-2]
+		if msgMap, ok := target.(map[string]any); ok {
+			if _, hasCC := msgMap["cache_control"]; !hasCC {
+				msgMap["cache_control"] = map[string]any{"type": "ephemeral"}
+			}
+		}
+	}
+
 	root["messages"] = msgs
 
 	var tools []any
