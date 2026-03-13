@@ -40,6 +40,12 @@ type Backend interface {
 	// QueryIPStats returns per-client-IP statistics since the given time.
 	QueryIPStats(ctx context.Context, since time.Time) ([]IPStats, error)
 
+	// QueryAPIKeyStats returns per-API-key statistics since the given time.
+	QueryAPIKeyStats(ctx context.Context, since time.Time) ([]APIKeyStats, error)
+
+	// ResetAll deletes all usage records from the database.
+	ResetAll(ctx context.Context) error
+
 	// Cleanup removes records older than the given time.
 	Cleanup(ctx context.Context, before time.Time) (int64, error)
 

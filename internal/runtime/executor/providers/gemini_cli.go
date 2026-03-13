@@ -181,7 +181,7 @@ func (e *GeminiCLIExecutor) Execute(ctx context.Context, auth *provider.Auth, re
 
 		lastStatus = httpResp.StatusCode
 		lastBody = append([]byte(nil), data...)
-		log.Debugf("request error, error status: %d, error body: %s", httpResp.StatusCode, executor.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), data))
+		executor.LogUpstreamError("gemini-cli executor", httpResp.StatusCode, executor.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), data))
 		if httpResp.StatusCode == 429 {
 			hasNextModel := idx+1 < len(models)
 			if hasNextModel {
@@ -317,7 +317,7 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *provider.Au
 			}
 			lastStatus = httpResp.StatusCode
 			lastBody = append([]byte(nil), data...)
-			log.Debugf("request error, error status: %d, error body: %s", httpResp.StatusCode, executor.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), data))
+			executor.LogUpstreamError("gemini-cli executor", httpResp.StatusCode, executor.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), data))
 			if httpResp.StatusCode == 429 {
 				hasNextModel := idx+1 < len(models)
 				if hasNextModel {

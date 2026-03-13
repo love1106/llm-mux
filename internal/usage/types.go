@@ -134,10 +134,8 @@ func (m *Manager) Publish(ctx context.Context, record Record) {
 		return
 	}
 	m.queue = append(m.queue, queueItem{ctx: ctx, record: record})
-	queueLen := len(m.queue)
 	m.mu.Unlock()
 	m.cond.Signal()
-	log.Infof("usage: published record for %s/%s, queue len=%d", record.Provider, record.Model, queueLen)
 }
 
 func (m *Manager) run(ctx context.Context) {
@@ -194,7 +192,6 @@ func RegisterPlugin(plugin Plugin) { DefaultManager().Register(plugin) }
 
 // PublishRecord publishes a record using the default manager.
 func PublishRecord(ctx context.Context, record Record) {
-	log.Infof("usage: PublishRecord called for %s/%s", record.Provider, record.Model)
 	DefaultManager().Publish(ctx, record)
 }
 

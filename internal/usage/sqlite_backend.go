@@ -503,7 +503,64 @@ func (b *SQLiteBackend) QueryIPStats(ctx context.Context, since time.Time) ([]IP
 	return results, rows.Err()
 }
 
+func (b *SQLiteBackend) QueryAPIKeyStats(ctx context.Context, since time.Time) ([]APIKeyStats, error) {
+	rows, err := b.db.QueryContext(ctx, `
+		SELECT
+			COALESCE(NULLIF(api_key, ''), 'unknown') as api_key,
+			COUNT(*) as requests,
+			SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END) as success_count,
+			SUM(CASE WHEN failed = 1 THEN 1 ELSE 0 END) as failure_count,
+			COALESCE(SUM(input_tokens), 0) as input_tokens,
+			COALESCE(SUM(output_tokens), 0) as output_tokens,
+			COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
+			COALESCE(SUM(total_tokens), 0) as total_tokens,
+			COALESCE(SUM(cache_creation_input_tokens), 0) as cache_creation_input_tokens,
+			COALESCE(SUM(cache_read_input_tokens), 0) as cache_read_input_tokens,
+			GROUP_CONCAT(DISTINCT NULLIF(model, '')) as models,
+			MAX(requested_at) as last_seen_at
+		FROM usage_records
+		WHERE requested_at >= ?
+		GROUP BY api_key
+		ORDER BY SUM(total_tokens) DESC
+	`, since)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query API key stats: %w", err)
+	}
+	defer rows.Close()
+
+	var results []APIKeyStats
+	for rows.Next() {
+		var aks APIKeyStats
+		var modelsStr sql.NullString
+		var lastSeenStr sql.NullString
+		if err := rows.Scan(
+			&aks.APIKey, &aks.Requests, &aks.SuccessCount, &aks.FailureCount,
+			&aks.InputTokens, &aks.OutputTokens, &aks.ReasoningTokens, &aks.TotalTokens,
+			&aks.CacheCreationInputTokens, &aks.CacheReadInputTokens,
+			&modelsStr, &lastSeenStr,
+		); err != nil {
+			return nil, err
+		}
+		if modelsStr.Valid && modelsStr.String != "" {
+			aks.Models = strings.Split(modelsStr.String, ",")
+		}
+		if lastSeenStr.Valid && lastSeenStr.String != "" {
+			aks.LastSeenAt = parseSQLiteTimestamp(lastSeenStr.String)
+		}
+		results = append(results, aks)
+	}
+	return results, rows.Err()
+}
+
 // Cleanup removes records older than the given time.
+// ResetAll deletes all usage records from the database.
+// ResetAll deletes all usage records. Uses DELETE (not TRUNCATE) because SQLite
+// does not support TRUNCATE; DELETE without WHERE is optimized to a table clear.
+func (b *SQLiteBackend) ResetAll(ctx context.Context) error {
+	_, err := b.db.ExecContext(ctx, "DELETE FROM usage_records")
+	return err
+}
+
 func (b *SQLiteBackend) Cleanup(ctx context.Context, before time.Time) (int64, error) {
 	result, err := b.db.ExecContext(ctx, `
 		DELETE FROM usage_records WHERE requested_at < ?

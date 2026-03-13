@@ -143,7 +143,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *provider.Auth, req p
 	}
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		b, _ := io.ReadAll(httpResp.Body)
-		log.Debugf("request error, error status: %d, error body: %s", httpResp.StatusCode, executor.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), b))
+		executor.LogUpstreamError("claude executor", httpResp.StatusCode, executor.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), b))
 		err = executor.NewStatusError(httpResp.StatusCode, string(b), nil)
 		if errClose := httpResp.Body.Close(); errClose != nil {
 			log.Errorf("response body close error: %v", errClose)
@@ -251,7 +251,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *provider.Auth,
 	}
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		b, _ := io.ReadAll(httpResp.Body)
-		log.Debugf("request error, error status: %d, error body: %s", httpResp.StatusCode, executor.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), b))
+		executor.LogUpstreamError("claude executor", httpResp.StatusCode, executor.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), b))
 		if errClose := httpResp.Body.Close(); errClose != nil {
 			log.Errorf("response body close error: %v", errClose)
 		}

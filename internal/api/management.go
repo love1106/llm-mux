@@ -22,6 +22,7 @@ func (s *Server) registerManagementRoutes() {
 	mgmt.Use(s.managementAvailabilityMiddleware(), s.mgmt.Middleware())
 	{
 		mgmt.GET("/usage", s.mgmt.GetUsageStatistics)
+		mgmt.DELETE("/usage", s.mgmt.ResetUsage)
 		mgmt.GET("/config", s.mgmt.GetConfig)
 		mgmt.GET("/config.yaml", s.mgmt.GetConfigYAML)
 		mgmt.PUT("/config.yaml", s.mgmt.PutConfigYAML)

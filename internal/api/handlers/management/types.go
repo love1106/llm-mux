@@ -9,6 +9,7 @@ type UsageStatsResponse struct {
 	ByAccount  map[string]UsageAccountStats  `json:"by_account,omitempty"`
 	ByModel    map[string]UsageModelStats    `json:"by_model,omitempty"`
 	ByIP       map[string]UsageIPStats       `json:"by_ip,omitempty"`
+	ByAPIKey   map[string]UsageAPIKeyStats   `json:"by_api_key,omitempty"`
 	Timeline   *UsageTimeline                `json:"timeline,omitempty"`
 	Period     UsagePeriod                   `json:"period"`
 }
@@ -72,12 +73,24 @@ type UsageModelStats struct {
 }
 
 type UsageIPStats struct {
-	Requests   int64        `json:"requests"`
-	Success    int64        `json:"success"`
-	Failure    int64        `json:"failure"`
-	Tokens     TokenSummary `json:"tokens"`
-	Models     []string     `json:"models,omitempty"`
-	LastSeenAt string       `json:"last_seen_at,omitempty"`
+	Requests   int64         `json:"requests"`
+	Success    int64         `json:"success"`
+	Failure    int64         `json:"failure"`
+	Tokens     TokenSummary  `json:"tokens"`
+	Cache      *CacheSummary `json:"cache,omitempty"`
+	Models     []string      `json:"models,omitempty"`
+	LastSeenAt string        `json:"last_seen_at,omitempty"`
+}
+
+// UsageAPIKeyStats represents per-API-key statistics.
+type UsageAPIKeyStats struct {
+	Requests   int64         `json:"requests"`
+	Success    int64         `json:"success"`
+	Failure    int64         `json:"failure"`
+	Tokens     TokenSummary  `json:"tokens"`
+	Cache      *CacheSummary `json:"cache,omitempty"`
+	Models     []string      `json:"models,omitempty"`
+	LastSeenAt string        `json:"last_seen_at,omitempty"`
 }
 
 // UsageTimeline holds time-series usage data.

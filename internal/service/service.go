@@ -254,6 +254,13 @@ func (s *Service) applyCoreAuthAddOrUpdate(ctx context.Context, auth *provider.A
 		auth.CreatedAt = existing.CreatedAt
 		auth.LastRefreshedAt = existing.LastRefreshedAt
 		auth.NextRefreshAfter = existing.NextRefreshAfter
+		// Preserve disabled state from existing entry to avoid overwriting
+		// user-toggled state with fresh token file data.
+		if existing.Disabled {
+			auth.Disabled = true
+			auth.Status = existing.Status
+			auth.StatusMessage = existing.StatusMessage
+		}
 		if _, err := s.coreManager.Update(ctx, auth); err != nil {
 			log.Errorf("failed to update auth %s: %v", auth.ID, err)
 		}

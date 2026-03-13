@@ -165,7 +165,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *provider.Auth, 
 		if readErr != nil {
 			return nil, readErr
 		}
-		log.Debugf("codex executor: error status: %d, body: %s", httpResp.StatusCode, executor.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), data))
+		executor.LogUpstreamError("codex executor", httpResp.StatusCode, executor.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), data))
 		return nil, executor.NewStatusError(httpResp.StatusCode, string(data), nil)
 	}
 

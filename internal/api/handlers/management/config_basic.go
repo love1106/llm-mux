@@ -245,6 +245,8 @@ func (h *Handler) PutDebug(c *gin.Context) {
 		return
 	}
 	cfg := h.getConfig()
+	// Apply log level immediately so the toggle takes effect without waiting for config reload
+	util.SetLogLevel(cfg)
 	respondOK(c, gin.H{"debug": cfg.Debug})
 }
 

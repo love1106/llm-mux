@@ -120,6 +120,20 @@ func (r *usageReporter) publishWithOutcome(ctx context.Context, u *ir.Usage, fai
 		totalTokens = u.TotalTokens
 	}
 	log.Debugf("usage_reporter: publishing usage for %s/%s, tokens=%d", r.provider, r.model, totalTokens)
+
+	// Attach token summary to gin context for the request log line
+	if u != nil {
+		if ginCtx, ok := ctx.Value("gin_context").(*gin.Context); ok && ginCtx != nil {
+			ginCtx.Set(log.UsageLogDataKey, log.UsageLogData{
+				Model:       r.model,
+				Input:       u.PromptTokens,
+				Output:      u.CompletionTokens,
+				CacheCreate: u.CacheCreationInputTokens,
+				CacheRead:   u.CacheReadInputTokens,
+			})
+		}
+	}
+
 	r.once.Do(func() {
 		usage.PublishRecord(ctx, usage.Record{
 			Provider:    r.provider,

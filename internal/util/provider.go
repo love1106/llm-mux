@@ -16,11 +16,7 @@ func GetProviderName(modelName string) []string {
 
 	normalizer := registry.NewModelIDNormalizer()
 	cleanModelName := normalizer.NormalizeModelID(modelName)
-	log.Infof("GetProviderName: modelName=%s, cleanModelName=%s", modelName, cleanModelName)
-
 	modelProviders := registry.GetGlobalRegistry().GetModelProviders(cleanModelName)
-	log.Infof("GetProviderName: modelProviders=%v", modelProviders)
-
 	return modelProviders
 }
 

@@ -10,6 +10,18 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// UsageLogData holds token metrics attached to the gin context for request logging.
+// Set by the usage reporter, read by the GIN logger to produce a single log line.
+const UsageLogDataKey = "usage_log_data"
+
+type UsageLogData struct {
+	Model       string
+	Input       int64
+	Output      int64
+	CacheCreate int64
+	CacheRead   int64
+}
+
 func GinLogrusLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
@@ -45,6 +57,22 @@ func GinLogrusLogger() gin.HandlerFunc {
 		if selectedAuth, exists := c.Get("selected_auth"); exists {
 			if authID, ok := selectedAuth.(string); ok && authID != "" {
 				logLine = logLine + " | auth=" + authID
+			}
+		}
+
+		// Append model and token breakdown if available
+		if v, exists := c.Get(UsageLogDataKey); exists {
+			if ud, ok := v.(UsageLogData); ok {
+				if ud.Model != "" {
+					logLine = logLine + " | model=" + ud.Model
+				}
+				logLine = logLine + fmt.Sprintf(" | in=%d out=%d", ud.Input, ud.Output)
+				if ud.CacheCreate > 0 {
+					logLine = logLine + fmt.Sprintf(" cache_w=%d", ud.CacheCreate)
+				}
+				if ud.CacheRead > 0 {
+					logLine = logLine + fmt.Sprintf(" cache_r=%d", ud.CacheRead)
+				}
 			}
 		}
 

@@ -88,6 +88,22 @@ type IPStats struct {
 	LastSeenAt               time.Time `json:"last_seen_at"`
 }
 
+// APIKeyStats represents aggregated metrics per client API key.
+type APIKeyStats struct {
+	APIKey                   string    `json:"api_key"`
+	Requests                 int64     `json:"requests"`
+	SuccessCount             int64     `json:"success_count"`
+	FailureCount             int64     `json:"failure_count"`
+	InputTokens              int64     `json:"input_tokens"`
+	OutputTokens             int64     `json:"output_tokens"`
+	ReasoningTokens          int64     `json:"reasoning_tokens"`
+	TotalTokens              int64     `json:"total_tokens"`
+	CacheCreationInputTokens int64     `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64     `json:"cache_read_input_tokens"`
+	Models                   []string  `json:"models"`
+	LastSeenAt               time.Time `json:"last_seen_at"`
+}
+
 // DetailRecord represents a single recent request for detailed views.
 type DetailRecord struct {
 	APIKey      string     `json:"api_key"`

@@ -27,8 +27,7 @@ func HandleHTTPError(resp *http.Response, executorName string) HTTPErrorResult {
 		}
 	}
 
-	log.Debugf("%s: error status: %d, body: %s", executorName, resp.StatusCode,
-		summarizeErrorBody(resp.Header.Get("Content-Type"), body))
+	LogUpstreamError(executorName, resp.StatusCode, summarizeErrorBody(resp.Header.Get("Content-Type"), body))
 
 	return HTTPErrorResult{
 		Error:      NewStatusError(resp.StatusCode, string(body), nil),
@@ -82,4 +81,17 @@ func NewNotImplementedError(msg string) StatusError {
 
 func NewTimeoutError(msg string) StatusError {
 	return NewStatusError(http.StatusRequestTimeout, msg, nil)
+}
+
+// LogUpstreamError logs upstream provider errors at the appropriate severity.
+// Server errors (5xx), auth errors (401/403), and quota errors (429) are logged
+// at Warn level since they indicate issues needing operator attention.
+// User errors (4xx) are logged at Debug level since they are caused by client requests.
+func LogUpstreamError(executorName string, statusCode int, body string) {
+	switch {
+	case statusCode >= 500, statusCode == 401, statusCode == 403, statusCode == 429:
+		log.Warnf("%s: upstream error: HTTP %d: %s", executorName, statusCode, body)
+	default:
+		log.Debugf("%s: upstream error: HTTP %d: %s", executorName, statusCode, body)
+	}
 }

@@ -110,6 +110,9 @@ type Manager struct {
 	retryBudget *resilience.RetryBudget
 
 	registry *AuthRegistry
+
+	localStateMu    sync.RWMutex
+	localStateCache *localAuthState
 }
 
 // NewManager constructs a manager with optional custom selector and hook.
@@ -214,6 +217,8 @@ func (m *Manager) Register(ctx context.Context, auth *Auth) (*Auth, error) {
 	if auth == nil {
 		return nil, nil
 	}
+	// Restore persisted disabled state for file-based deployments.
+	m.applyLocalAuthState(auth)
 	auth.EnsureIndex()
 	if auth.ID == "" {
 		auth.ID = uuid.NewString()
@@ -247,6 +252,7 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 		_, _ = m.registry.Update(ctx, auth)
 	}
 	_ = m.persist(ctx, auth)
+	m.persistDisabledState()
 	m.hook.OnAuthUpdated(ctx, auth.Clone())
 
 	return auth.Clone(), nil

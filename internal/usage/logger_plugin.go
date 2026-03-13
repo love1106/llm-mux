@@ -111,6 +111,24 @@ func (p *LoggerPlugin) GetCounters() CounterSnapshot {
 	return p.counters.Snapshot()
 }
 
+// ResetAll flushes pending writes, wipes all persisted records, then zeroes counters.
+func (p *LoggerPlugin) ResetAll(ctx context.Context) error {
+	if p == nil {
+		return nil
+	}
+	if p.backend != nil {
+		// Flush queued records so nothing is written after the wipe.
+		_ = p.backend.Flush(ctx)
+		if err := p.backend.ResetAll(ctx); err != nil {
+			return err
+		}
+	}
+	if p.counters != nil {
+		p.counters.Reset()
+	}
+	return nil
+}
+
 // GetBackend returns the backend for query operations.
 func (p *LoggerPlugin) GetBackend() Backend {
 	if p == nil {

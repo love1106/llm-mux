@@ -371,7 +371,7 @@ func (e *GeminiExecutor) CountTokens(ctx context.Context, auth *provider.Auth, r
 		return provider.Response{}, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		log.Debugf("gemini executor: error status: %d, body: %s", resp.StatusCode, executor.SummarizeErrorBody(resp.Header.Get("Content-Type"), data))
+		executor.LogUpstreamError("gemini executor", resp.StatusCode, executor.SummarizeErrorBody(resp.Header.Get("Content-Type"), data))
 		return provider.Response{}, executor.NewStatusError(resp.StatusCode, string(data), nil)
 	}
 

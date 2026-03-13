@@ -445,6 +445,54 @@ func (b *PostgresBackend) QueryIPStats(ctx context.Context, since time.Time) ([]
 	return results, rows.Err()
 }
 
+func (b *PostgresBackend) QueryAPIKeyStats(ctx context.Context, since time.Time) ([]APIKeyStats, error) {
+	rows, err := b.pool.Query(ctx, `
+		SELECT
+			COALESCE(NULLIF(api_key, ''), 'unknown') as api_key,
+			COUNT(*) as requests,
+			SUM(CASE WHEN failed = false THEN 1 ELSE 0 END) as success_count,
+			SUM(CASE WHEN failed = true THEN 1 ELSE 0 END) as failure_count,
+			COALESCE(SUM(input_tokens), 0) as input_tokens,
+			COALESCE(SUM(output_tokens), 0) as output_tokens,
+			COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
+			COALESCE(SUM(total_tokens), 0) as total_tokens,
+			COALESCE(SUM(cache_creation_input_tokens), 0) as cache_creation_input_tokens,
+			COALESCE(SUM(cache_read_input_tokens), 0) as cache_read_input_tokens,
+			ARRAY_AGG(DISTINCT NULLIF(model, '')) FILTER (WHERE model != '') as models,
+			MAX(requested_at) as last_seen_at
+		FROM usage_records
+		WHERE requested_at >= $1
+		GROUP BY api_key
+		ORDER BY SUM(total_tokens) DESC
+	`, since)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query API key stats: %w", err)
+	}
+	defer rows.Close()
+
+	var results []APIKeyStats
+	for rows.Next() {
+		var aks APIKeyStats
+		if err := rows.Scan(
+			&aks.APIKey, &aks.Requests, &aks.SuccessCount, &aks.FailureCount,
+			&aks.InputTokens, &aks.OutputTokens, &aks.ReasoningTokens, &aks.TotalTokens,
+			&aks.CacheCreationInputTokens, &aks.CacheReadInputTokens,
+			&aks.Models, &aks.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		results = append(results, aks)
+	}
+	return results, rows.Err()
+}
+
+// ResetAll deletes all usage records. Uses TRUNCATE for Postgres as it is
+// faster than DELETE for full table wipes (no row-level WAL logging).
+func (b *PostgresBackend) ResetAll(ctx context.Context) error {
+	_, err := b.pool.Exec(ctx, "TRUNCATE TABLE usage_records")
+	return err
+}
+
 func (b *PostgresBackend) Cleanup(ctx context.Context, before time.Time) (int64, error) {
 	result, err := b.pool.Exec(ctx, `
 		DELETE FROM usage_records WHERE requested_at < $1

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -22,15 +23,17 @@ import {
   Bar,
   Legend,
 } from 'recharts'
-import { Download, RefreshCw, TrendingUp, Minus, Database } from 'lucide-react'
+import { Download, RefreshCw, TrendingUp, Minus, Database, Trash2, Key } from 'lucide-react'
 import { format } from 'date-fns'
 
 type TimeRange = '1h' | '24h' | '7d' | '30d'
 
 const COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#8dd1e1', '#d084d8', '#84d8c9']
 
-const VALID_TABS = ['timeline', 'providers', 'accounts', 'ips'] as const
+const VALID_TABS = ['timeline', 'providers', 'accounts', 'ips', 'apikeys'] as const
 const VALID_RANGES: TimeRange[] = ['1h', '24h', '7d', '30d']
+
+const maskAPIKey = (key: string) => (key.length <= 12 ? key : key.slice(0, 12) + '...')
 
 export function UsagePage() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -76,16 +79,35 @@ export function UsagePage() {
     }
   }
 
+  const [resetting, setResetting] = useState(false)
+
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['usage', timeRange],
     queryFn: () => managementApi.getUsage({ days: getDays() }),
     refetchInterval: 30000,
   })
 
+  const handleReset = async () => {
+    if (!window.confirm('Are you sure you want to reset all usage statistics? This action cannot be undone.')) {
+      return
+    }
+    setResetting(true)
+    try {
+      await managementApi.resetUsage()
+      toast.success('Usage statistics reset successfully')
+      refetch()
+    } catch {
+      toast.error('Failed to reset usage statistics')
+    } finally {
+      setResetting(false)
+    }
+  }
+
   const stats = data?.data?.data
   const byProvider = stats?.by_provider || {}
   const byAccount = stats?.by_account || {}
   const byIP = stats?.by_ip || {}
+  const byAPIKey = stats?.by_api_key || {}
   const timeline = stats?.timeline?.by_day || []
 
   const providerData = Object.entries(byProvider).map(([name, data]) => ({
@@ -101,6 +123,21 @@ export function UsagePage() {
     tokens: data.tokens?.total || 0,
   }))
 
+  const apiKeyData = Object.entries(byAPIKey)
+    .map(([key, data]) => ({
+      key,
+      masked: maskAPIKey(key),
+      requests: data.requests || 0,
+      tokens: data.tokens?.total || 0,
+      input: data.tokens?.input || 0,
+      output: data.tokens?.output || 0,
+      cacheCreate: data.cache?.cache_creation_tokens || 0,
+      cacheRead: data.cache?.cache_read_tokens || 0,
+      models: data.models || [],
+      lastSeen: data.last_seen_at || '',
+    }))
+    .sort((a, b) => b.tokens - a.tokens)
+
   const ipData = Object.entries(byIP)
     .map(([ip, data]) => ({
       ip,
@@ -108,6 +145,8 @@ export function UsagePage() {
       tokens: data.tokens?.total || 0,
       input: data.tokens?.input || 0,
       output: data.tokens?.output || 0,
+      cacheCreate: data.cache?.cache_creation_tokens || 0,
+      cacheRead: data.cache?.cache_read_tokens || 0,
       models: data.models || [],
       lastSeen: data.last_seen_at || '',
     }))
@@ -115,7 +154,7 @@ export function UsagePage() {
 
   const totalTokens = stats?.summary?.tokens?.total || 0
   const maxAccountTokens = Math.max(...accountData.map((a) => a.tokens), 1)
-  const maxIPTokens = Math.max(...ipData.map((i) => i.tokens), 1)
+  const maxAPIKeyTokens = Math.max(...apiKeyData.map((a) => a.tokens), 1)
 
   const handleExport = (format: 'csv' | 'json') => {
     if (!stats) return
@@ -142,13 +181,26 @@ export function UsagePage() {
           data.tokens?.total?.toString() || '0',
         ]),
         [],
-        ['IP Address', 'Requests', 'Input Tokens', 'Output Tokens', 'Total Tokens'],
+        ['IP Address', 'Requests', 'Input Tokens', 'Output Tokens', 'Total Tokens', 'Cache Write', 'Cache Read'],
         ...Object.entries(byIP).map(([ip, data]) => [
           ip,
           (data.requests || 0).toString(),
           (data.tokens?.input || 0).toString(),
           (data.tokens?.output || 0).toString(),
           (data.tokens?.total || 0).toString(),
+          (data.cache?.cache_creation_tokens || 0).toString(),
+          (data.cache?.cache_read_tokens || 0).toString(),
+        ]),
+        [],
+        ['API Key', 'Requests', 'Input Tokens', 'Output Tokens', 'Total Tokens', 'Cache Write', 'Cache Read'],
+        ...Object.entries(byAPIKey).map(([key, data]) => [
+          key.slice(0, 12) + '...',
+          (data.requests || 0).toString(),
+          (data.tokens?.input || 0).toString(),
+          (data.tokens?.output || 0).toString(),
+          (data.tokens?.total || 0).toString(),
+          (data.cache?.cache_creation_tokens || 0).toString(),
+          (data.cache?.cache_read_tokens || 0).toString(),
         ]),
       ]
       const csv = rows.map((row) => row.join(',')).join('\n')
@@ -203,6 +255,11 @@ export function UsagePage() {
           <Button variant="outline" onClick={() => handleExport('json')}>
             <Download className="h-4 w-4 mr-2" />
             JSON
+          </Button>
+
+          <Button variant="destructive" onClick={handleReset} disabled={resetting}>
+            <Trash2 className="h-4 w-4 mr-2" />
+            {resetting ? 'Resetting...' : 'Reset All'}
           </Button>
         </div>
       </div>
@@ -298,6 +355,7 @@ export function UsagePage() {
               <TabsTrigger value="providers">By Provider</TabsTrigger>
               <TabsTrigger value="accounts">By Account</TabsTrigger>
               <TabsTrigger value="ips">By IP</TabsTrigger>
+              <TabsTrigger value="apikeys">By API Key</TabsTrigger>
             </TabsList>
 
             <TabsContent value="timeline">
@@ -506,6 +564,8 @@ export function UsagePage() {
                               <th className="text-right py-3 px-2 font-medium text-muted-foreground">Input Tokens</th>
                               <th className="text-right py-3 px-2 font-medium text-muted-foreground">Output Tokens</th>
                               <th className="text-right py-3 px-2 font-medium text-muted-foreground">Total Tokens</th>
+                              <th className="text-right py-3 px-2 font-medium text-muted-foreground">Cache Write</th>
+                              <th className="text-right py-3 px-2 font-medium text-muted-foreground">Cache Read</th>
                               <th className="text-left py-3 px-2 font-medium text-muted-foreground">Models</th>
                               <th className="text-right py-3 px-2 font-medium text-muted-foreground">Last Seen</th>
                             </tr>
@@ -518,6 +578,8 @@ export function UsagePage() {
                                 <td className="py-3 px-2 text-right text-muted-foreground">{row.input.toLocaleString()}</td>
                                 <td className="py-3 px-2 text-right text-muted-foreground">{row.output.toLocaleString()}</td>
                                 <td className="py-3 px-2 text-right font-medium">{row.tokens.toLocaleString()}</td>
+                                <td className="py-3 px-2 text-right text-muted-foreground">{row.cacheCreate > 0 ? row.cacheCreate.toLocaleString() : '—'}</td>
+                                <td className="py-3 px-2 text-right text-muted-foreground">{row.cacheRead > 0 ? row.cacheRead.toLocaleString() : '—'}</td>
                                 <td className="py-3 px-2 text-muted-foreground">{row.models.join(', ')}</td>
                                 <td className="py-3 px-2 text-right text-muted-foreground">
                                   {row.lastSeen ? format(new Date(row.lastSeen), 'MMM dd, HH:mm') : '—'}
@@ -527,21 +589,62 @@ export function UsagePage() {
                           </tbody>
                         </table>
                       </div>
-                      <div className="space-y-4">
-                        {ipData.map((row) => (
-                          <div key={row.ip} className="space-y-2">
-                            <div className="flex items-center justify-between">
-                              <span className="font-medium text-sm">{row.ip}</span>
-                              <div className="text-right text-sm">
-                                <span className="text-muted-foreground">{row.requests.toLocaleString()} req</span>
-                                <span className="mx-2">·</span>
-                                <span>{row.tokens.toLocaleString()} tokens</span>
-                              </div>
-                            </div>
-                            <Progress value={(row.tokens / maxIPTokens) * 100} />
-                          </div>
-                        ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="apikeys">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Key className="h-4 w-4" />
+                    Usage by API Key
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {apiKeyData.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground">No API key data available</div>
+                  ) : (
+                    <div className="space-y-6">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b">
+                              <th className="text-left py-3 px-2 font-medium text-muted-foreground">API Key</th>
+                              <th className="text-right py-3 px-2 font-medium text-muted-foreground">Requests</th>
+                              <th className="text-right py-3 px-2 font-medium text-muted-foreground">Input Tokens</th>
+                              <th className="text-right py-3 px-2 font-medium text-muted-foreground">Output Tokens</th>
+                              <th className="text-right py-3 px-2 font-medium text-muted-foreground">Total Tokens</th>
+                              <th className="text-right py-3 px-2 font-medium text-muted-foreground">Cache Write</th>
+                              <th className="text-right py-3 px-2 font-medium text-muted-foreground">Cache Read</th>
+                              <th className="text-left py-3 px-2 font-medium text-muted-foreground">Models</th>
+                              <th className="text-right py-3 px-2 font-medium text-muted-foreground">Last Seen</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {apiKeyData.map((row) => (
+                              <tr key={row.key} className="border-b last:border-0">
+                                <td className="py-3 px-2 font-mono text-xs" title={row.key}>
+                                  {row.masked}
+                                </td>
+                                <td className="py-3 px-2 text-right text-muted-foreground">{row.requests.toLocaleString()}</td>
+                                <td className="py-3 px-2 text-right text-muted-foreground">{row.input.toLocaleString()}</td>
+                                <td className="py-3 px-2 text-right text-muted-foreground">{row.output.toLocaleString()}</td>
+                                <td className="py-3 px-2 text-right font-medium">{row.tokens.toLocaleString()}</td>
+                                <td className="py-3 px-2 text-right text-muted-foreground">{row.cacheCreate > 0 ? row.cacheCreate.toLocaleString() : '—'}</td>
+                                <td className="py-3 px-2 text-right text-muted-foreground">{row.cacheRead > 0 ? row.cacheRead.toLocaleString() : '—'}</td>
+                                <td className="py-3 px-2 text-muted-foreground">{row.models.join(', ')}</td>
+                                <td className="py-3 px-2 text-right text-muted-foreground">
+                                  {row.lastSeen ? format(new Date(row.lastSeen), 'MMM dd, HH:mm') : '—'}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
+                     
                     </div>
                   )}
                 </CardContent>

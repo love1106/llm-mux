@@ -183,7 +183,7 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *provider.Auth, 
 			continue
 
 		case executor.RetryActionFail:
-			log.Debugf("antigravity executor: upstream error status: %d, body: %s", httpResp.StatusCode, executor.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), bodyBytes))
+			executor.LogUpstreamError("antigravity executor", httpResp.StatusCode, executor.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), bodyBytes))
 			retryAfter := executor.ParseQuotaRetryDelay(bodyBytes)
 			return resp, executor.NewStatusError(httpResp.StatusCode, string(bodyBytes), retryAfter)
 		}

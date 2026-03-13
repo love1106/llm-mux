@@ -81,7 +81,8 @@ export interface UsageStats {
   by_provider: Record<string, { requests: number; tokens: { total: number; input: number; output: number }; cost_usd: number; cache?: CacheInfo }>
   by_account: Record<string, { provider: string; auth_id: string; requests: number; tokens: { total: number; input: number; output: number } }>
   by_model: Record<string, { provider: string; requests: number; tokens: { total: number; input: number; output: number }; cost_usd: number; cache?: CacheInfo }>
-  by_ip?: Record<string, { requests: number; success: number; failure: number; tokens: { total: number; input: number; output: number; reasoning: number }; models: string[]; last_seen_at: string }>
+  by_ip?: Record<string, { requests: number; success: number; failure: number; tokens: { total: number; input: number; output: number; reasoning: number }; cache?: CacheInfo; models: string[]; last_seen_at: string }>
+  by_api_key?: Record<string, { requests: number; success: number; failure: number; tokens: { total: number; input: number; output: number; reasoning: number }; cache?: CacheInfo; models: string[]; last_seen_at: string }>
   timeline?: {
     by_day: Array<{ day: string; requests: number; tokens: number }>
   }
@@ -101,6 +102,7 @@ export const managementApi = {
 
   getUsage: (params?: { days?: number; from?: string; to?: string }) =>
     api.get<ApiResponse<UsageStats>>('/usage', { params }),
+  resetUsage: () => api.delete('/usage'),
 
   getLogs: (params?: { limit?: number; after?: number }) =>
     api.get<ApiResponse<{ lines: string[]; latest_timestamp: number }>>('/logs', { params }),

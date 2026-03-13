@@ -1,6 +1,7 @@
 package management
 
 import (
+	"net/http"
 	"strconv"
 	"time"
 
@@ -147,11 +148,35 @@ func (h *Handler) GetUsageStatistics(c *gin.Context) {
 					Output:    is.OutputTokens,
 					Reasoning: is.ReasoningTokens,
 				},
+				Cache:      buildCacheSummary(is.CacheCreationInputTokens, is.CacheReadInputTokens, is.InputTokens),
 				Models:     is.Models,
 				LastSeenAt: is.LastSeenAt.Format(time.RFC3339),
 			}
 		}
 		response.ByIP = byIP
+	}
+
+	if apiKeyStats, err := backend.QueryAPIKeyStats(ctx, from); err != nil {
+		log.Warnf("usage: failed to query API key stats: %v", err)
+	} else if len(apiKeyStats) > 0 {
+		byAPIKey := make(map[string]UsageAPIKeyStats, len(apiKeyStats))
+		for _, aks := range apiKeyStats {
+			byAPIKey[aks.APIKey] = UsageAPIKeyStats{
+				Requests: aks.Requests,
+				Success:  aks.SuccessCount,
+				Failure:  aks.FailureCount,
+				Tokens: TokenSummary{
+					Total:     aks.TotalTokens,
+					Input:     aks.InputTokens,
+					Output:    aks.OutputTokens,
+					Reasoning: aks.ReasoningTokens,
+				},
+				Cache:      buildCacheSummary(aks.CacheCreationInputTokens, aks.CacheReadInputTokens, aks.InputTokens),
+				Models:     aks.Models,
+				LastSeenAt: aks.LastSeenAt.Format(time.RFC3339),
+			}
+		}
+		response.ByAPIKey = byAPIKey
 	}
 
 	timeline := &UsageTimeline{}
@@ -236,4 +261,18 @@ func (h *Handler) parseTimeRange(c *gin.Context, retentionDays int) (from, to ti
 	}
 
 	return from, to
+}
+
+// ResetUsage deletes all usage records and resets in-memory counters.
+func (h *Handler) ResetUsage(c *gin.Context) {
+	if h == nil || h.usagePlugin == nil {
+		respondOK(c, gin.H{"status": "ok"})
+		return
+	}
+	if err := h.usagePlugin.ResetAll(c.Request.Context()); err != nil {
+		log.Errorf("usage: failed to reset: %v", err)
+		respondError(c, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"status": "ok"})
 }
